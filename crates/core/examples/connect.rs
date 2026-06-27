@@ -1,0 +1,19 @@
+use tokio_postgres::{Error, NoTls};
+
+#[tokio::main]
+async fn main() -> Result<(), Error> {
+    let (client, connection) =
+        tokio_postgres::connect("host=localhost user=noahmoss dbname=bird-flocks", NoTls).await?;
+
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            eprintln!("connection error: {}", e);
+        }
+    });
+
+    let rows = client.query("SELECT * FROM bird", &[]).await?;
+
+    println!("{:?}", rows);
+
+    Ok(())
+}
