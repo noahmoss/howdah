@@ -286,6 +286,7 @@ dependencies = [
  "howdah-core",
  "nvim-rs",
  "tokio",
+ "tokio-postgres",
 ]
 
 [[package]]
