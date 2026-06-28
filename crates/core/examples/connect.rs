@@ -1,3 +1,4 @@
+use howdah_core::run_query;
 use tokio_postgres::{Error, NoTls};
 
 #[tokio::main]
@@ -11,9 +12,8 @@ async fn main() -> Result<(), Error> {
         }
     });
 
-    let rows = client.query("SELECT * FROM bird", &[]).await?;
-
-    println!("{:?}", rows);
+    let results = run_query(&client, "SELECT * FROM bird").await;
+    println!("{:?}", results);
 
     Ok(())
 }
