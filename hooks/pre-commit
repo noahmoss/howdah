@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Format staged Fennel sources with fnlfmt before committing.
+set -euo pipefail
+
+# Locate fnlfmt: prefer PATH, fall back to the luarocks --local bin dir.
+if command -v fnlfmt >/dev/null 2>&1; then
+  FNLFMT="$(command -v fnlfmt)"
+else
+  FNLFMT="$HOME/.luarocks/bin/fnlfmt"
+fi
+
+if [ ! -x "$FNLFMT" ]; then
+  echo "pre-commit: fnlfmt not found (looked on PATH and at $FNLFMT)" >&2
+  echo "pre-commit: install with 'luarocks install --local fnlfmt' or skip with 'git commit --no-verify'" >&2
+  exit 1
+fi
+
+# Only consider staged, present (Added/Copied/Modified) .fnl files.
+# NUL-delimited to be safe with unusual filenames.
+while IFS= read -r -d '' file; do
+  "$FNLFMT" --fix "$file"
+  git add -- "$file"
+done < <(git diff --cached --name-only --diff-filter=ACM -z -- '*.fnl')
