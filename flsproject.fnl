@@ -1,1 +1,1 @@
-{:extra-globals "vim"}
+{:extra-globals :vim}
