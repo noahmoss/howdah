@@ -13,10 +13,10 @@
   "Returns a table of per-column display widths."
   (local widths {})
   (for [i 1 (length cols)]
-    (set (. widths i) (cell-width (. cols i))))
+    (tset widths i (cell-width (. cols i))))
   (each [_ row (ipairs rows)]
     (for [i 1 (length row)]
-      (set (. widths i) (math.max (. widths i) (cell-width (. row i))))))
+      (tset widths i (math.max (. widths i) (cell-width (. row i))))))
   widths)
 
 (fn format-row [row widths]
