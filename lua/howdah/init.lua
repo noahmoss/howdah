@@ -1,17 +1,14 @@
+-- [nfnl] fnl/howdah/init.fnl
 local howdah = {}
-
-function howdah.connect()
-	howdah.channel = vim.fn.jobstart({
-		"/Users/noahmoss/Projects/howdah/target/debug/howdah-server",
-	}, { rpc = true })
+howdah.connect = function()
+  howdah.channel = vim.fn.jobstart({"/Users/noahmoss/Projects/howdah/target/debug/howdah-server"}, {rpc = true})
+  return nil
 end
-
-function howdah.ping()
-	return vim.rpcrequest(howdah.channel, "ping")
+howdah.ping = function()
+  return vim.rpcrequest(howdah.channel, "ping")
 end
-
-function howdah.query(sql)
-	return vim.rpcrequest(howdah.channel, "query", sql)
+howdah.query = function(sql)
+  return vim.rpcrequest(howdah.channel, "query", sql)
 end
-
+--[[ (howdah.connect) (howdah.query "select * from bird") ]]
 return howdah
