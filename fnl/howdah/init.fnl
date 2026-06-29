@@ -10,7 +10,7 @@
 (fn cell-width [s] (vim.fn.strdisplaywidth s))
 
 (fn compute-widths [cols rows]
-  "Returns a table of per-column dislpay widths."
+  "Returns a table of per-column display widths."
   (local widths {})
   (for [i 1 (length cols)]
     (set (. widths i) (cell-width (. cols i))))
