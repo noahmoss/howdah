@@ -79,5 +79,10 @@ howdah.show = function(_5_)
   vim.api.nvim_buf_set_lines(buffer, 0, -1, false, lines)
   return vim.api.nvim_open_win(buffer, true, {split = "below"})
 end
+howdah.run = function()
+  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  local sql = table.concat(lines, "\n")
+  return howdah.show(howdah.query(sql))
+end
 --[[ (howdah.connect) (local results (howdah.query "select * from bird")) (howdah.show (howdah.query "select * from bird where flock_id = 3")) (vim.api.nvim_open_win buffer true {:split "below"}) ]]
 return howdah
