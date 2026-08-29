@@ -31,52 +31,49 @@ impl Handler for NeovimHandler {
 
 impl NeovimHandler {
     async fn handle_query(&self, args: Vec<Value>) -> Result<Value, Value> {
-        if args.len() == 1 {
-            if let Some(sql) = args[0].as_str() {
-                let client = self.client.lock().unwrap().as_ref().map(Arc::clone);
-                match client {
-                    Some(client) => match run_query(&client, sql).await {
-                        Ok(QueryResult { rows, cols }) => {
-                            let col_value =
-                                Value::Array(cols.into_iter().map(Value::from).collect());
-
-                            let row_values = Value::Array(
-                                rows.into_iter()
-                                    .map(|row| {
-                                        Value::Array(row.into_iter().map(Value::from).collect())
-                                    })
-                                    .collect(),
-                            );
-                            Ok(Value::Map(vec![
-                                (Value::from("cols"), col_value),
-                                (Value::from("rows"), row_values),
-                            ]))
-                        }
-                        Err(err) => {
-                            let mut err_text = format!("Execution error: {}\n", err);
-                            let mut source = err.source();
-                            while let Some(e) = source {
-                                err_text.push_str(&format!("Caused by: {}\n", e));
-                                source = e.source()
-                            }
-                            Err(Value::from(err_text))
-                        }
-                    },
-                    None => Err(Value::from(
-                        "not connected to a database (call connect() first)",
-                    )),
-                }
-            } else {
-                Err(Value::from(format!(
-                    "method \"query\" expects string, received {}",
-                    &args[0]
-                )))
-            }
-        } else {
-            Err(Value::from(format!(
+        if args.len() != 1 {
+            return Err(Value::from(format!(
                 "method \"query\" expects 1 arg, received {}",
                 args.len()
-            )))
+            )));
+        }
+
+        let Some(sql) = args[0].as_str() else {
+            return Err(Value::from(format!(
+                "method \"query\" expects string, received {}",
+                &args[0]
+            )));
+        };
+
+        let Some(client) = self.client.lock().unwrap().as_ref().map(Arc::clone) else {
+            return Err(Value::from(
+                "not connected to a database (call connect() first)",
+            ));
+        };
+
+        match run_query(&client, sql).await {
+            Ok(QueryResult { rows, cols }) => {
+                let col_value = Value::Array(cols.into_iter().map(Value::from).collect());
+
+                let row_values = Value::Array(
+                    rows.into_iter()
+                        .map(|row| Value::Array(row.into_iter().map(Value::from).collect()))
+                        .collect(),
+                );
+                Ok(Value::Map(vec![
+                    (Value::from("cols"), col_value),
+                    (Value::from("rows"), row_values),
+                ]))
+            }
+            Err(err) => {
+                let mut err_text = format!("Execution error: {}\n", err);
+                let mut source = err.source();
+                while let Some(e) = source {
+                    err_text.push_str(&format!("Caused by: {}\n", e));
+                    source = e.source()
+                }
+                Err(Value::from(err_text))
+            }
         }
     }
 }
