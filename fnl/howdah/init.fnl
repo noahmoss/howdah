@@ -1,7 +1,9 @@
 (local howdah {})
 
 (fn howdah.connect []
-  (set howdah.channel (vim.fn.jobstart [:/Users/noahmoss/Projects/howdah/target/debug/howdah-server]
+  (set howdah.channel (vim.fn.jobstart [(. (vim.api.nvim_get_runtime_file :target/debug/howdah-server
+                                                                          false)
+                                           1)]
                                        {:rpc true})))
 
 (fn howdah.ping []

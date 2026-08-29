@@ -1,7 +1,7 @@
 -- [nfnl] fnl/howdah/init.fnl
 local howdah = {}
 howdah.connect = function()
-  howdah.channel = vim.fn.jobstart({"/Users/noahmoss/Projects/howdah/target/debug/howdah-server"}, {rpc = true})
+  howdah.channel = vim.fn.jobstart({vim.api.nvim_get_runtime_file("target/debug/howdah-server", false)[1]}, {rpc = true})
   return nil
 end
 howdah.ping = function()
