@@ -1,4 +1,7 @@
-use std::{error::Error, sync::Arc};
+use std::{
+    error::Error,
+    sync::{Arc, Mutex},
+};
 
 use async_trait::async_trait;
 use howdah_core::{QueryResult, run_query};
@@ -8,7 +11,7 @@ use tokio_postgres::{Client, NoTls};
 
 #[derive(Clone, Debug)]
 struct NeovimHandler {
-    client: Arc<Client>,
+    client: Arc<Mutex<Option<Arc<Client>>>>,
 }
 
 #[async_trait]
@@ -26,32 +29,40 @@ impl Handler for NeovimHandler {
             "query" => {
                 if args.len() == 1 {
                     if let Some(sql) = args[0].as_str() {
-                        match run_query(&self.client, sql).await {
-                            Ok(QueryResult { rows, cols }) => {
-                                let col_value =
-                                    Value::Array(cols.into_iter().map(Value::from).collect());
+                        let client = self.client.lock().unwrap().as_ref().map(Arc::clone);
+                        match client {
+                            Some(client) => match run_query(&client, sql).await {
+                                Ok(QueryResult { rows, cols }) => {
+                                    let col_value =
+                                        Value::Array(cols.into_iter().map(Value::from).collect());
 
-                                let row_values = Value::Array(
-                                    rows.into_iter()
-                                        .map(|row| {
-                                            Value::Array(row.into_iter().map(Value::from).collect())
-                                        })
-                                        .collect(),
-                                );
-                                Ok(Value::Map(vec![
-                                    (Value::from("cols"), col_value),
-                                    (Value::from("rows"), row_values),
-                                ]))
-                            }
-                            Err(err) => {
-                                let mut err_text = format!("Execution error: {}\n", err);
-                                let mut source = err.source();
-                                while let Some(e) = source {
-                                    err_text.push_str(&format!("Caused by: {}\n", e));
-                                    source = e.source()
+                                    let row_values = Value::Array(
+                                        rows.into_iter()
+                                            .map(|row| {
+                                                Value::Array(
+                                                    row.into_iter().map(Value::from).collect(),
+                                                )
+                                            })
+                                            .collect(),
+                                    );
+                                    Ok(Value::Map(vec![
+                                        (Value::from("cols"), col_value),
+                                        (Value::from("rows"), row_values),
+                                    ]))
                                 }
-                                Err(Value::from(err_text))
-                            }
+                                Err(err) => {
+                                    let mut err_text = format!("Execution error: {}\n", err);
+                                    let mut source = err.source();
+                                    while let Some(e) = source {
+                                        err_text.push_str(&format!("Caused by: {}\n", e));
+                                        source = e.source()
+                                    }
+                                    Err(Value::from(err_text))
+                                }
+                            },
+                            None => Err(Value::from(
+                                "not connected to a database (call connect() first)",
+                            )),
                         }
                     } else {
                         Err(Value::from(format!(
@@ -76,7 +87,7 @@ impl Handler for NeovimHandler {
 #[tokio::main]
 async fn main() {
     let (client, connection) =
-        tokio_postgres::connect("host=localhost user=noahmoss dbname=bird-flocks", NoTls)
+        tokio_postgres::connect("host=localhost user=noahmoss dbname=howdah_dev", NoTls)
             .await
             .expect("Failed to connect to PostgreSQL");
 
@@ -87,7 +98,7 @@ async fn main() {
     });
 
     let handler = NeovimHandler {
-        client: Arc::new(client),
+        client: Arc::new(Mutex::new(Some(Arc::new(client)))),
     };
     let (nvim, io_handler) = create::new_parent(handler).await.unwrap();
 
