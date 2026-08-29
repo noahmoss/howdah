@@ -3,10 +3,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use handlers::NeovimHandler;
 use nvim_rs::create::tokio as create;
 use tokio_postgres::NoTls;
-
-use handlers::NeovimHandler;
 
 mod handlers;
 

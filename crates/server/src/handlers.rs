@@ -1,22 +1,10 @@
-use howdah_core::QueryResult;
-
-use howdah_core::run_query;
-use tokio_postgres::Client;
-
-use std::sync::Arc;
-use std::sync::Mutex;
-
-use nvim_rs::Neovim;
-
-use nvim_rs::Value;
-
-use tokio::fs::File;
-
-use nvim_rs::compat::tokio::Compat;
-
-use nvim_rs::Handler;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use howdah_core::{QueryResult, run_query};
+use nvim_rs::{Handler, Neovim, Value, compat::tokio::Compat};
+use tokio::fs::File;
+use tokio_postgres::Client;
 
 #[derive(Clone, Debug)]
 pub struct NeovimHandler {
