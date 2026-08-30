@@ -25,7 +25,6 @@ impl Handler for NeovimHandler {
         _neovim: Neovim<Compat<File>>,
     ) -> Result<Value, Value> {
         match name.as_ref() {
-            "ping" => Ok(Value::from("pong")),
             "connect" => self.handle_connect(args).await,
             "query" => self.handle_query(args).await,
             _ => Err(Value::from(format!("unknown method: {}", name))),

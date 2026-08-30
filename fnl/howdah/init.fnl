@@ -3,16 +3,25 @@
 (fn rpc [method ...]
   (vim.rpcrequest howdah.channel method ...))
 
-(fn howdah.spawn []
-  (let [path :target/debug/howdah-server
-        binary (. (vim.api.nvim_get_runtime_file path false) 1)]
-    (set howdah.channel (vim.fn.jobstart [binary] {:rpc true}))))
+(fn howdah.start []
+  "Starts the Howdah backend process and initializes the channel for msgpack RPCs."
+  (when (not howdah.channel)
+    (let [path :target/debug/howdah-server
+          binary (. (vim.api.nvim_get_runtime_file path false) 1)]
+      (set howdah.channel (vim.fn.jobstart [binary] {:rpc true})))))
 
-(fn howdah.ping [] (rpc :ping))
+(fn howdah.stop []
+  "Stops the running server, if one exists, and clears the RPC channel."
+  (when howdah.channel
+    (vim.fn.jobstop howdah.channel)
+    (set howdah.channel nil)))
 
-(fn howdah.connect [connection-string] (rpc :connect connection-string))
+(fn howdah.connect [connection-string]
+  "Initializes a connection to a PostgreSQL instance, given a connection string."
+  (rpc :connect connection-string))
 
-(fn howdah.query [sql] (rpc :query sql))
+(fn howdah.query [sql]
+  (rpc :query sql))
 
 (fn cell-width [s] (vim.fn.strdisplaywidth s))
 
@@ -54,7 +63,7 @@
         sql (table.concat lines "\n")]
     (howdah.show (howdah.query sql))))
 
-(comment (howdah.spawn)
+(comment (howdah.start)
   (howdah.connect "host=localhost user=noahmoss dbname=howdah_dev")
   (howdah.show (howdah.query "select 1")))
 

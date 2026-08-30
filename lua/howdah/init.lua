@@ -3,14 +3,24 @@ local howdah = {}
 local function rpc(method, ...)
   return vim.rpcrequest(howdah.channel, method, ...)
 end
-howdah.spawn = function()
-  local path = "target/debug/howdah-server"
-  local binary = vim.api.nvim_get_runtime_file(path, false)[1]
-  howdah.channel = vim.fn.jobstart({binary}, {rpc = true})
-  return nil
+howdah.start = function()
+  if not howdah.channel then
+    local path = "target/debug/howdah-server"
+    local binary = vim.api.nvim_get_runtime_file(path, false)[1]
+    howdah.channel = vim.fn.jobstart({binary}, {rpc = true})
+    return nil
+  else
+    return nil
+  end
 end
-howdah.ping = function()
-  return rpc("ping")
+howdah.stop = function()
+  if howdah.channel then
+    vim.fn.jobstop(howdah.channel)
+    howdah.channel = nil
+    return nil
+  else
+    return nil
+  end
 end
 howdah.connect = function(connection_string)
   return rpc("connect", connection_string)
@@ -34,7 +44,7 @@ local function compute_widths(cols, rows)
   return widths
 end
 local function format_row(row, widths)
-  local _1_
+  local _3_
   do
     local tbl_26_ = {}
     local i_27_ = 0
@@ -46,12 +56,12 @@ local function format_row(row, widths)
       else
       end
     end
-    _1_ = tbl_26_
+    _3_ = tbl_26_
   end
-  return table.concat(_1_, " | ")
+  return table.concat(_3_, " | ")
 end
 local function separator(widths)
-  local _3_
+  local _5_
   do
     local tbl_26_ = {}
     local i_27_ = 0
@@ -63,9 +73,9 @@ local function separator(widths)
       else
       end
     end
-    _3_ = tbl_26_
+    _5_ = tbl_26_
   end
-  return table.concat(_3_, "-+-")
+  return table.concat(_5_, "-+-")
 end
 local function format_results(cols, rows)
   local widths = compute_widths(cols, rows)
@@ -79,9 +89,9 @@ local function format_results(cols, rows)
   end
   return tbl_24_
 end
-howdah.show = function(_5_)
-  local cols = _5_.cols
-  local rows = _5_.rows
+howdah.show = function(_7_)
+  local cols = _7_.cols
+  local rows = _7_.rows
   local lines = format_results(cols, rows)
   local buffer = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_lines(buffer, 0, -1, false, lines)
@@ -92,5 +102,5 @@ howdah.run = function()
   local sql = table.concat(lines, "\n")
   return howdah.show(howdah.query(sql))
 end
---[[ (howdah.spawn) (howdah.connect "host=localhost user=noahmoss dbname=howdah_dev") (howdah.show (howdah.query "select 1")) ]]
+--[[ (howdah.start) (howdah.connect "host=localhost user=noahmoss dbname=howdah_dev") (howdah.show (howdah.query "select 1")) ]]
 return howdah
