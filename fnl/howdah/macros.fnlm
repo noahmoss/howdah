@@ -1,7 +1,0 @@
-;; Clojure-inspired macros for a Clojure-inspired world
-
-(fn when-not [condition & body]
-  `(when (not ,condition)
-     ,(unpack body)))
-
-{: when-not}
