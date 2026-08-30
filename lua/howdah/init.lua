@@ -3,11 +3,19 @@ local howdah = {}
 local function rpc(method, ...)
   return vim.rpcrequest(howdah.channel, method, ...)
 end
+local function resolve_binary()
+  local release_path = "target/release/howdah-server"
+  local debug_path = "target/debug/howdah-server"
+  local binary = (vim.api.nvim_get_runtime_file(release_path, false)[1] or vim.api.nvim_get_runtime_file(debug_path, false)[1])
+  return assert(binary, "howdah: could not resolve server binary")
+end
 howdah.start = function()
   if not howdah.channel then
-    local path = "target/debug/howdah-server"
-    local binary = vim.api.nvim_get_runtime_file(path, false)[1]
-    howdah.channel = vim.fn.jobstart({binary}, {rpc = true})
+    local binary = resolve_binary()
+    local channel = vim.fn.jobstart({binary}, {rpc = true})
+    assert((channel ~= 0), "howdah: failed to start server: invalid arguments")
+    assert((channel ~= -1), "howdah: failed to start server: not an executable")
+    howdah.channel = channel
     return nil
   else
     return nil
@@ -23,6 +31,10 @@ howdah.stop = function()
   end
 end
 howdah.connect = function(connection_string)
+  if not howdah.channel then
+    howdah.start()
+  else
+  end
   return rpc("connect", connection_string)
 end
 howdah.query = function(sql)
@@ -44,7 +56,7 @@ local function compute_widths(cols, rows)
   return widths
 end
 local function format_row(row, widths)
-  local _3_
+  local _4_
   do
     local tbl_26_ = {}
     local i_27_ = 0
@@ -56,12 +68,12 @@ local function format_row(row, widths)
       else
       end
     end
-    _3_ = tbl_26_
+    _4_ = tbl_26_
   end
-  return table.concat(_3_, " | ")
+  return table.concat(_4_, " | ")
 end
 local function separator(widths)
-  local _5_
+  local _6_
   do
     local tbl_26_ = {}
     local i_27_ = 0
@@ -73,9 +85,9 @@ local function separator(widths)
       else
       end
     end
-    _5_ = tbl_26_
+    _6_ = tbl_26_
   end
-  return table.concat(_5_, "-+-")
+  return table.concat(_6_, "-+-")
 end
 local function format_results(cols, rows)
   local widths = compute_widths(cols, rows)
@@ -89,9 +101,9 @@ local function format_results(cols, rows)
   end
   return tbl_24_
 end
-howdah.show = function(_7_)
-  local cols = _7_.cols
-  local rows = _7_.rows
+howdah.show = function(_8_)
+  local cols = _8_.cols
+  local rows = _8_.rows
   local lines = format_results(cols, rows)
   local buffer = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_lines(buffer, 0, -1, false, lines)

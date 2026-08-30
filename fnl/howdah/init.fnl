@@ -3,12 +3,23 @@
 (fn rpc [method ...]
   (vim.rpcrequest howdah.channel method ...))
 
+(fn resolve-binary []
+  (let [release-path :target/release/howdah-server
+        debug-path :target/debug/howdah-server
+        binary (or (. (vim.api.nvim_get_runtime_file release-path false) 1)
+                   (. (vim.api.nvim_get_runtime_file debug-path false) 1))]
+    (assert binary "howdah: could not resolve server binary")))
+
 (fn howdah.start []
   "Starts the Howdah backend process and initializes the channel for msgpack RPCs."
   (when (not howdah.channel)
-    (let [path :target/debug/howdah-server
-          binary (. (vim.api.nvim_get_runtime_file path false) 1)]
-      (set howdah.channel (vim.fn.jobstart [binary] {:rpc true})))))
+    (let [binary (resolve-binary)
+          channel (vim.fn.jobstart [binary] {:rpc true})]
+      (assert (not= channel 0)
+              "howdah: failed to start server: invalid arguments")
+      (assert (not= channel -1)
+              "howdah: failed to start server: not an executable")
+      (set howdah.channel channel))))
 
 (fn howdah.stop []
   "Stops the running server, if one exists, and clears the RPC channel."
@@ -17,7 +28,10 @@
     (set howdah.channel nil)))
 
 (fn howdah.connect [connection-string]
-  "Initializes a connection to a PostgreSQL instance, given a connection string."
+  "Initializes a connection to a PostgreSQL instance, given a connection
+  string. Starts the server first if an RPC channel has not been set up."
+  (when (not howdah.channel)
+    (howdah.start))
   (rpc :connect connection-string))
 
 (fn howdah.query [sql]
