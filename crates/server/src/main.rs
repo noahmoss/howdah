@@ -1,9 +1,6 @@
-use std::{
-    error::Error,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
-use handlers::NeovimHandler;
+use handlers::{NeovimHandler, error_chain};
 use nvim_rs::create::tokio as create;
 use tokio_postgres::NoTls;
 
@@ -40,13 +37,7 @@ async fn main() {
 
             // Not a clean channel close; walk & log the error sources
             if !err.is_channel_closed() {
-                eprintln!("Error: {}", err);
-
-                let mut source = err.source();
-                while let Some(e) = source {
-                    eprintln!("Caused by: {}", e);
-                    source = e.source();
-                }
+                eprintln!("Error: {}", error_chain(&err))
             }
 
             // Otherwise, assume this is a part of normal shutdown

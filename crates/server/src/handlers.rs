@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    error::Error,
+    sync::{Arc, Mutex},
+};
 
 use async_trait::async_trait;
 use howdah_core::{QueryResult, run_query};
@@ -30,6 +33,14 @@ impl Handler for NeovimHandler {
 }
 
 impl NeovimHandler {
+    /// Returns the current database client, if one is connected.
+    ///
+    /// The lock serializes access to the client slot, not use of the client
+    /// itself, so we return a cloned handle and release the lock immediately.
+    fn current_client(&self) -> Option<Arc<Client>> {
+        self.client.lock().unwrap().as_ref().map(Arc::clone)
+    }
+
     async fn handle_query(&self, args: Vec<Value>) -> Result<Value, Value> {
         if args.len() != 1 {
             return Err(Value::from(format!(
@@ -45,35 +56,46 @@ impl NeovimHandler {
             )));
         };
 
-        let Some(client) = self.client.lock().unwrap().as_ref().map(Arc::clone) else {
+        let Some(client) = self.current_client() else {
             return Err(Value::from(
                 "not connected to a database (call connect() first)",
             ));
         };
 
         match run_query(&client, sql).await {
-            Ok(QueryResult { rows, cols }) => {
-                let col_value = Value::Array(cols.into_iter().map(Value::from).collect());
-
-                let row_values = Value::Array(
-                    rows.into_iter()
-                        .map(|row| Value::Array(row.into_iter().map(Value::from).collect()))
-                        .collect(),
-                );
-                Ok(Value::Map(vec![
-                    (Value::from("cols"), col_value),
-                    (Value::from("rows"), row_values),
-                ]))
-            }
+            Ok(result) => Ok(query_result_to_msgpack(result)),
             Err(err) => {
-                let mut err_text = format!("Execution error: {}\n", err);
-                let mut source = err.source();
-                while let Some(e) = source {
-                    err_text.push_str(&format!("Caused by: {}\n", e));
-                    source = e.source()
-                }
-                Err(Value::from(err_text))
+                let chain = error_chain(err.as_ref());
+                Err(Value::from(format!("Execution error: {}", chain)))
             }
         }
     }
+}
+
+/// Returns a msgpack value representing the query results, with `cols`
+/// formatted as an array of strings, and `rows` formatted as an array of arrays
+/// of strings.
+fn query_result_to_msgpack(result: QueryResult) -> Value {
+    let QueryResult { rows, cols } = result;
+    let col_value = Value::Array(cols.into_iter().map(Value::from).collect());
+    let row_values = Value::Array(
+        rows.into_iter()
+            .map(|row| Value::Array(row.into_iter().map(Value::from).collect()))
+            .collect(),
+    );
+    Value::Map(vec![
+        (Value::from("cols"), col_value),
+        (Value::from("rows"), row_values),
+    ])
+}
+
+/// Returns an error formatted with its chain of causes, one per line
+pub(crate) fn error_chain(err: &dyn Error) -> String {
+    let mut err_text = format!("{}", err);
+    let mut source = err.source();
+    while let Some(e) = source {
+        err_text.push_str(&format!("\nCaused by: {}", e));
+        source = e.source()
+    }
+    err_text
 }
