@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use howdah_core::{QueryResult, run_query};
 use nvim_rs::{Handler, Neovim, Value, compat::tokio::Compat};
 use tokio::fs::File;
-use tokio_postgres::Client;
+use tokio_postgres::{Client, NoTls};
 
 #[derive(Clone, Debug)]
 pub struct NeovimHandler {
@@ -26,6 +26,7 @@ impl Handler for NeovimHandler {
     ) -> Result<Value, Value> {
         match name.as_ref() {
             "ping" => Ok(Value::from("pong")),
+            "connect" => self.handle_connect(args).await,
             "query" => self.handle_query(args).await,
             _ => Err(Value::from(format!("unknown method: {}", name))),
         }
@@ -39,6 +40,36 @@ impl NeovimHandler {
     /// itself, so we return a cloned handle and release the lock immediately.
     fn current_client(&self) -> Option<Arc<Client>> {
         self.client.lock().unwrap().as_ref().map(Arc::clone)
+    }
+
+    async fn handle_connect(&self, args: Vec<Value>) -> Result<Value, Value> {
+        if args.len() != 1 {
+            return Err(Value::from(format!(
+                "method \"connect\" expects 1 arg, received {}",
+                args.len()
+            )));
+        }
+
+        let Some(connection_string) = args[0].as_str() else {
+            return Err(Value::from(format!(
+                "method \"connect\" expects string, received {}",
+                &args[0]
+            )));
+        };
+
+        let (client, connection) = tokio_postgres::connect(connection_string, NoTls)
+            .await
+            .map_err(|e| Value::from(format!("connection error: {}", error_chain(&e))))?;
+
+        tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                eprintln!("connection error: {}", error_chain(&e));
+            }
+        });
+
+        *self.client.lock().unwrap() = Some(Arc::new(client));
+
+        Ok(Value::Nil)
     }
 
     async fn handle_query(&self, args: Vec<Value>) -> Result<Value, Value> {
@@ -66,7 +97,7 @@ impl NeovimHandler {
             Ok(result) => Ok(query_result_to_msgpack(result)),
             Err(err) => {
                 let chain = error_chain(err.as_ref());
-                Err(Value::from(format!("Execution error: {}", chain)))
+                Err(Value::from(format!("execution error: {}", chain)))
             }
         }
     }

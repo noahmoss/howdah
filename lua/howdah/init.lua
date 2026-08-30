@@ -1,11 +1,22 @@
 -- [nfnl] fnl/howdah/init.fnl
 local howdah = {}
-howdah.connect = function()
-  howdah.channel = vim.fn.jobstart({vim.api.nvim_get_runtime_file("target/debug/howdah-server", false)[1]}, {rpc = true})
+local function rpc(method, ...)
+  return vim.rpcrequest(howdah.channel, method, ...)
+end
+howdah.spawn = function()
+  local path = "target/debug/howdah-server"
+  local binary = vim.api.nvim_get_runtime_file(path, false)[1]
+  howdah.channel = vim.fn.jobstart({binary}, {rpc = true})
   return nil
 end
 howdah.ping = function()
-  return vim.rpcrequest(howdah.channel, "ping")
+  return rpc("ping")
+end
+howdah.connect = function(connection_string)
+  return rpc("connect", connection_string)
+end
+howdah.query = function(sql)
+  return rpc("query", sql)
 end
 local function cell_width(s)
   return vim.fn.strdisplaywidth(s)
@@ -68,9 +79,6 @@ local function format_results(cols, rows)
   end
   return tbl_24_
 end
-howdah.query = function(sql)
-  return vim.rpcrequest(howdah.channel, "query", sql)
-end
 howdah.show = function(_5_)
   local cols = _5_.cols
   local rows = _5_.rows
@@ -84,5 +92,5 @@ howdah.run = function()
   local sql = table.concat(lines, "\n")
   return howdah.show(howdah.query(sql))
 end
---[[ (howdah.connect) (local results (howdah.query "select * from bird")) (howdah.show (howdah.query "select * from bird where flock_id = 3")) (vim.api.nvim_open_win buffer true {:split "below"}) ]]
+--[[ (howdah.spawn) (howdah.connect "host=localhost user=noahmoss dbname=howdah_dev") (howdah.show (howdah.query "select 1")) (vim.api.nvim_open_win buffer true {:split "below"}) ]]
 return howdah

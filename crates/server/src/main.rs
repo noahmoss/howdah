@@ -2,26 +2,14 @@ use std::sync::{Arc, Mutex};
 
 use handlers::{NeovimHandler, error_chain};
 use nvim_rs::create::tokio as create;
-use tokio_postgres::NoTls;
 
 mod handlers;
 
 // TODO: add error logging not to stderr
 #[tokio::main]
 async fn main() {
-    let (client, connection) =
-        tokio_postgres::connect("host=localhost user=noahmoss dbname=howdah_dev", NoTls)
-            .await
-            .expect("Failed to connect to PostgreSQL");
-
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            eprintln!("connection error: {}", e);
-        }
-    });
-
     let handler = NeovimHandler {
-        client: Arc::new(Mutex::new(Some(Arc::new(client)))),
+        client: Arc::new(Mutex::new(None)),
     };
     let (nvim, io_handler) = create::new_parent(handler).await.unwrap();
 
