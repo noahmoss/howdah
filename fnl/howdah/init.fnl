@@ -1,3 +1,5 @@
+(import-macros {: when-not} :howdah.macros)
+
 (local howdah {})
 
 (fn rpc [method ...]
@@ -5,10 +7,10 @@
 
 (fn howdah.start []
   "Starts the Howdah backend process and initializes the channel for msgpack RPCs."
-  (when (not howdah.channel)
-    (let [path :target/debug/howdah-server
-          binary (. (vim.api.nvim_get_runtime_file path false) 1)]
-      (set howdah.channel (vim.fn.jobstart [binary] {:rpc true})))))
+  (when-not howdah.channel
+            (let [path :target/debug/howdah-server
+                  binary (. (vim.api.nvim_get_runtime_file path false) 1)]
+              (set howdah.channel (vim.fn.jobstart [binary] {:rpc true})))))
 
 (fn howdah.stop []
   "Stops the running server, if one exists, and clears the RPC channel."
