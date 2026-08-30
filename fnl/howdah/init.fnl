@@ -56,7 +56,6 @@
 
 (comment (howdah.spawn)
   (howdah.connect "host=localhost user=noahmoss dbname=howdah_dev")
-  (howdah.show (howdah.query "select 1"))
-  (vim.api.nvim_open_win buffer true {:split :below}))
+  (howdah.show (howdah.query "select 1")))
 
 howdah

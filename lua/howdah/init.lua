@@ -92,5 +92,5 @@ howdah.run = function()
   local sql = table.concat(lines, "\n")
   return howdah.show(howdah.query(sql))
 end
---[[ (howdah.spawn) (howdah.connect "host=localhost user=noahmoss dbname=howdah_dev") (howdah.show (howdah.query "select 1")) (vim.api.nvim_open_win buffer true {:split "below"}) ]]
+--[[ (howdah.spawn) (howdah.connect "host=localhost user=noahmoss dbname=howdah_dev") (howdah.show (howdah.query "select 1")) ]]
 return howdah
