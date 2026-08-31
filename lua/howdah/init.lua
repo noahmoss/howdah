@@ -30,12 +30,58 @@ howdah.stop = function()
     return nil
   end
 end
-howdah.connect = function(connection_string)
+local function not_empty(s)
+  if (s ~= "") then
+    return s
+  else
+    return nil
+  end
+end
+local pg_vars = {{"PGHOST", "host", "/tmp"}, {"PGPORT", "port"}, {"PGUSER", "user"}, {"PGDATABASE", "dbname"}, {"PGPASSWORD", "password"}}
+local function build_from_pg_vars()
+  local _4_
+  do
+    local tbl_26_ = {}
+    local i_27_ = 0
+    for _i, _5_ in ipairs(pg_vars) do
+      local env_var = _5_[1]
+      local key = _5_[2]
+      local default = _5_[3]
+      local val_28_
+      do
+        local val = (not_empty(vim.env[env_var]) or default)
+        if val then
+          val_28_ = (key .. "=" .. val)
+        else
+          val_28_ = nil
+        end
+      end
+      if (nil ~= val_28_) then
+        i_27_ = (i_27_ + 1)
+        tbl_26_[i_27_] = val_28_
+      else
+      end
+    end
+    _4_ = tbl_26_
+  end
+  return table.concat(_4_, " ")
+end
+local function resolve_connection_string(arg)
+  return (not_empty(arg) or not_empty(vim.env.DATABASE_URL) or build_from_pg_vars())
+end
+howdah.connect = function(target)
   if not howdah.channel then
     howdah.start()
   else
   end
-  return rpc("connect", connection_string)
+  return rpc("connect", resolve_connection_string(target))
+end
+howdah.open = function(target)
+  howdah.connect(target)
+  local buffer = vim.api.nvim_create_buf(true, true)
+  vim.api.nvim_set_current_buf(buffer)
+  vim.bo.filetype = "sql"
+  return nil
 end
 howdah.query = function(sql)
   return rpc("query", sql)
@@ -56,7 +102,7 @@ local function compute_widths(cols, rows)
   return widths
 end
 local function format_row(row, widths)
-  local _4_
+  local _9_
   do
     local tbl_26_ = {}
     local i_27_ = 0
@@ -68,12 +114,12 @@ local function format_row(row, widths)
       else
       end
     end
-    _4_ = tbl_26_
+    _9_ = tbl_26_
   end
-  return table.concat(_4_, " | ")
+  return table.concat(_9_, " | ")
 end
 local function separator(widths)
-  local _6_
+  local _11_
   do
     local tbl_26_ = {}
     local i_27_ = 0
@@ -85,9 +131,9 @@ local function separator(widths)
       else
       end
     end
-    _6_ = tbl_26_
+    _11_ = tbl_26_
   end
-  return table.concat(_6_, "-+-")
+  return table.concat(_11_, "-+-")
 end
 local function format_results(cols, rows)
   local widths = compute_widths(cols, rows)
@@ -101,9 +147,9 @@ local function format_results(cols, rows)
   end
   return tbl_24_
 end
-howdah.show = function(_8_)
-  local cols = _8_.cols
-  local rows = _8_.rows
+howdah.show = function(_13_)
+  local cols = _13_.cols
+  local rows = _13_.rows
   local lines = format_results(cols, rows)
   local buffer = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_lines(buffer, 0, -1, false, lines)

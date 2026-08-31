@@ -27,12 +27,43 @@
     (vim.fn.jobstop howdah.channel)
     (set howdah.channel nil)))
 
-(fn howdah.connect [connection-string]
-  "Initializes a connection to a PostgreSQL instance, given a connection
-  string. Starts the server first if an RPC channel has not been set up."
+(fn not-empty [s]
+  "Returns s if it is not an empty string; otherwise nil."
+  (when (not= s "") s))
+
+(local pg-vars [[:PGHOST :host :/tmp]
+                [:PGPORT :port]
+                [:PGUSER :user]
+                [:PGDATABASE :dbname]
+                [:PGPASSWORD :password]])
+
+(fn build-from-pg-vars []
+  "Builds a string of key-value connection parameters from standard PostgreSQL
+  environment variables, if set. Host falls back to /tmp if unset, to mirror
+  psql's compiled-in default on macOS/Homebrew builds."
+  ;; TODO: move the /tmp default logic to the server-side
+  (table.concat (icollect [_i [env-var key default] (ipairs pg-vars)]
+                  (let [val (or (not-empty (. vim.env env-var)) default)]
+                    (when val (.. key "=" val)))) " "))
+
+(fn resolve-connection-string [arg]
+  (or (not-empty arg) (not-empty vim.env.DATABASE_URL) (build-from-pg-vars)))
+
+(fn howdah.connect [target]
+  "Initializes a connection to a PostgreSQL instance, using a passed-in
+  connection string or environment variables. Starts the server first if an RPC
+  channel has not been set up."
   (when (not howdah.channel)
     (howdah.start))
-  (rpc :connect connection-string))
+  (rpc :connect (resolve-connection-string target)))
+
+(fn howdah.open [target]
+  "Starts a new Howdah session, initializing a new connection and opening a SQL
+  buffer."
+  (howdah.connect target)
+  (let [buffer (vim.api.nvim_create_buf true true)]
+    (vim.api.nvim_set_current_buf buffer)
+    (set vim.bo.filetype :sql)))
 
 (fn howdah.query [sql]
   (rpc :query sql))
