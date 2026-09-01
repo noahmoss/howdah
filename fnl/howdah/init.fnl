@@ -31,7 +31,7 @@
   "Returns s if it is not an empty string; otherwise nil."
   (when (not= s "") s))
 
-(local pg-vars [[:PGHOST :host :/tmp]
+(local pg-vars [[:PGHOST :host]
                 [:PGPORT :port]
                 [:PGUSER :user]
                 [:PGDATABASE :dbname]
@@ -39,12 +39,11 @@
 
 (fn build-from-pg-vars []
   "Builds a string of key-value connection parameters from standard PostgreSQL
-  environment variables, if set. Host falls back to /tmp if unset, to mirror
-  psql's compiled-in default on macOS/Homebrew builds."
-  ;; TODO: move the /tmp default logic to the server-side
-  (table.concat (icollect [_i [env-var key default] (ipairs pg-vars)]
-                  (let [val (or (not-empty (. vim.env env-var)) default)]
-                    (when val (.. key "=" val)))) " "))
+  environment variables, if set."
+  (let [kvs (icollect [_i [env-var key] (ipairs pg-vars)]
+              (let [val (not-empty (. vim.env env-var))]
+                (when val (.. key "=" val))))]
+    (table.concat kvs " ")))
 
 (fn resolve-connection-string [arg]
   (or (not-empty arg) (not-empty vim.env.DATABASE_URL) (build-from-pg-vars)))

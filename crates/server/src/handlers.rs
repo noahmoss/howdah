@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use howdah_core::{QueryResult, run_query};
 use nvim_rs::{Handler, Neovim, Value, compat::tokio::Compat};
 use tokio::fs::File;
-use tokio_postgres::{Client, NoTls};
+use tokio_postgres::{Client, Config, NoTls};
 
 #[derive(Clone, Debug)]
 pub struct NeovimHandler {
@@ -56,9 +56,21 @@ impl NeovimHandler {
             )));
         };
 
-        let (client, connection) = tokio_postgres::connect(connection_string, NoTls)
-            .await
-            .map_err(|e| Value::from(format!("connection error: {}", error_chain(&e))))?;
+        let config = build_config(connection_string).map_err(|e| {
+            Value::from(format!(
+                "failed to parse connection string {}: {}",
+                connection_string,
+                error_chain(&e)
+            ))
+        })?;
+
+        let (client, connection) = config.connect(NoTls).await.map_err(|e| {
+            Value::from(format!(
+                "failed to connect to {}: {}",
+                connection_string,
+                error_chain(&e)
+            ))
+        })?;
 
         tokio::spawn(async move {
             if let Err(e) = connection.await {
@@ -100,6 +112,18 @@ impl NeovimHandler {
             }
         }
     }
+}
+
+fn build_config(connection_string: &str) -> Result<Config, tokio_postgres::Error> {
+    let mut config: Config = connection_string.parse()?;
+
+    // When not provided, host defaults to /tmp as the domain socket directory
+    // to match default libpq behavior.
+    if config.get_hosts().is_empty() {
+        config.host("/tmp");
+    };
+
+    Ok(config)
 }
 
 /// Returns a msgpack value representing the query results, with `cols`

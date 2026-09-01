@@ -37,19 +37,18 @@ local function not_empty(s)
     return nil
   end
 end
-local pg_vars = {{"PGHOST", "host", "/tmp"}, {"PGPORT", "port"}, {"PGUSER", "user"}, {"PGDATABASE", "dbname"}, {"PGPASSWORD", "password"}}
+local pg_vars = {{"PGHOST", "host"}, {"PGPORT", "port"}, {"PGUSER", "user"}, {"PGDATABASE", "dbname"}, {"PGPASSWORD", "password"}}
 local function build_from_pg_vars()
-  local _4_
+  local kvs
   do
     local tbl_26_ = {}
     local i_27_ = 0
-    for _i, _5_ in ipairs(pg_vars) do
-      local env_var = _5_[1]
-      local key = _5_[2]
-      local default = _5_[3]
+    for _i, _4_ in ipairs(pg_vars) do
+      local env_var = _4_[1]
+      local key = _4_[2]
       local val_28_
       do
-        local val = (not_empty(vim.env[env_var]) or default)
+        local val = not_empty(vim.env[env_var])
         if val then
           val_28_ = (key .. "=" .. val)
         else
@@ -62,9 +61,9 @@ local function build_from_pg_vars()
       else
       end
     end
-    _4_ = tbl_26_
+    kvs = tbl_26_
   end
-  return table.concat(_4_, " ")
+  return table.concat(kvs, " ")
 end
 local function resolve_connection_string(arg)
   return (not_empty(arg) or not_empty(vim.env.DATABASE_URL) or build_from_pg_vars())
@@ -102,7 +101,7 @@ local function compute_widths(cols, rows)
   return widths
 end
 local function format_row(row, widths)
-  local _9_
+  local _8_
   do
     local tbl_26_ = {}
     local i_27_ = 0
@@ -114,12 +113,12 @@ local function format_row(row, widths)
       else
       end
     end
-    _9_ = tbl_26_
+    _8_ = tbl_26_
   end
-  return table.concat(_9_, " | ")
+  return table.concat(_8_, " | ")
 end
 local function separator(widths)
-  local _11_
+  local _10_
   do
     local tbl_26_ = {}
     local i_27_ = 0
@@ -131,9 +130,9 @@ local function separator(widths)
       else
       end
     end
-    _11_ = tbl_26_
+    _10_ = tbl_26_
   end
-  return table.concat(_11_, "-+-")
+  return table.concat(_10_, "-+-")
 end
 local function format_results(cols, rows)
   local widths = compute_widths(cols, rows)
@@ -147,9 +146,9 @@ local function format_results(cols, rows)
   end
   return tbl_24_
 end
-howdah.show = function(_13_)
-  local cols = _13_.cols
-  local rows = _13_.rows
+howdah.show = function(_12_)
+  local cols = _12_.cols
+  local rows = _12_.rows
   local lines = format_results(cols, rows)
   local buffer = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_lines(buffer, 0, -1, false, lines)
