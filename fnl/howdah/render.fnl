@@ -29,10 +29,20 @@
     (icollect [_ row (ipairs rows) &into lines]
       (format-row row widths))))
 
+(var results-buffer nil)
+
+(fn get-or-create-results-buffer []
+  (when (or (not results-buffer)
+            (not (vim.api.nvim_buf_is_valid results-buffer)))
+    (set results-buffer (vim.api.nvim_create_buf false true)))
+  results-buffer)
+
 (fn render.show [{: cols : rows}]
   (let [lines (format-results cols rows)
-        buffer (vim.api.nvim_create_buf false true)]
+        buffer (get-or-create-results-buffer)]
     (vim.api.nvim_buf_set_lines buffer 0 -1 false lines)
-    (vim.api.nvim_open_win buffer true {:split :below})))
+    ;; Open a window for the buffer in a horizontal split when not already open
+    (when (= -1 (vim.fn.bufwinid buffer))
+      (vim.api.nvim_open_win buffer false {:split :below}))))
 
 render

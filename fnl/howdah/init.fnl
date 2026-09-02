@@ -64,13 +64,24 @@
   (howdah.connect target)
   (let [buffer (vim.api.nvim_create_buf true true)]
     (vim.api.nvim_set_current_buf buffer)
-    (set vim.bo.filetype :sql)))
+    (set vim.bo.filetype :sql)
+    ;; Set up keymaps
+    (vim.keymap.set :n :<localleader>eb howdah.run
+                    {: buffer :desc "Howdah: run buffer"})
+    (vim.keymap.set :x :<localleader>E howdah.run-selection
+                    {: buffer :desc "Howdah: run selection"})))
 
 (fn howdah.query [sql]
   (rpc :query sql))
 
 (fn howdah.run []
   (let [lines (vim.api.nvim_buf_get_lines 0 0 -1 false)
+        sql (table.concat lines "\n")]
+    (render.show (howdah.query sql))))
+
+(fn howdah.run-selection []
+  (let [lines (vim.fn.getregion (vim.fn.getpos :v) (vim.fn.getpos ".")
+                                {:type (vim.fn.mode)})
         sql (table.concat lines "\n")]
     (render.show (howdah.query sql))))
 

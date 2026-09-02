@@ -81,13 +81,19 @@ howdah.open = function(target)
   local buffer = vim.api.nvim_create_buf(true, true)
   vim.api.nvim_set_current_buf(buffer)
   vim.bo.filetype = "sql"
-  return nil
+  vim.keymap.set("n", "<localleader>eb", howdah.run, {buffer = buffer, desc = "Howdah: run buffer"})
+  return vim.keymap.set("x", "<localleader>E", howdah["run-selection"], {buffer = buffer, desc = "Howdah: run selection"})
 end
 howdah.query = function(sql)
   return rpc("query", sql)
 end
 howdah.run = function()
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  local sql = table.concat(lines, "\n")
+  return render.show(howdah.query(sql))
+end
+howdah["run-selection"] = function()
+  local lines = vim.fn.getregion(vim.fn.getpos("v"), vim.fn.getpos("."), {type = vim.fn.mode()})
   local sql = table.concat(lines, "\n")
   return render.show(howdah.query(sql))
 end

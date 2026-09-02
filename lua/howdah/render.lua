@@ -61,12 +61,24 @@ local function format_results(cols, rows)
   end
   return tbl_24_
 end
-render.show = function(_5_)
-  local cols = _5_.cols
-  local rows = _5_.rows
+local results_buffer = nil
+local function get_or_create_results_buffer()
+  if (not results_buffer or not vim.api.nvim_buf_is_valid(results_buffer)) then
+    results_buffer = vim.api.nvim_create_buf(false, true)
+  else
+  end
+  return results_buffer
+end
+render.show = function(_6_)
+  local cols = _6_.cols
+  local rows = _6_.rows
   local lines = format_results(cols, rows)
-  local buffer = vim.api.nvim_create_buf(false, true)
+  local buffer = get_or_create_results_buffer()
   vim.api.nvim_buf_set_lines(buffer, 0, -1, false, lines)
-  return vim.api.nvim_open_win(buffer, true, {split = "below"})
+  if (-1 == vim.fn.bufwinid(buffer)) then
+    return vim.api.nvim_open_win(buffer, false, {split = "below"})
+  else
+    return nil
+  end
 end
 return render
