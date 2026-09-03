@@ -60,7 +60,7 @@ impl NeovimHandler {
             Value::from(format!(
                 "failed to parse connection string {}: {}",
                 connection_string,
-                error_chain(&e)
+                error_chain(unwrap_db_error(&e))
             ))
         })?;
 
@@ -68,7 +68,7 @@ impl NeovimHandler {
             Value::from(format!(
                 "failed to connect to {}: {}",
                 connection_string,
-                error_chain(&e)
+                error_chain(unwrap_db_error(&e))
             ))
         })?;
 
@@ -106,10 +106,10 @@ impl NeovimHandler {
 
         match run_query(&client, sql).await {
             Ok(result) => Ok(query_result_to_msgpack(result)),
-            Err(err) => {
-                let chain = error_chain(err.as_ref());
-                Err(Value::from(format!("execution error: {}", chain)))
-            }
+            Err(err) => Err(Value::from(format!(
+                "execution error: {}",
+                error_chain(unwrap_db_error(&err))
+            ))),
         }
     }
 }
@@ -152,4 +152,10 @@ pub(crate) fn error_chain(err: &dyn Error) -> String {
         source = e.source()
     }
     err_text
+}
+
+// Skip the "db error: " prefix attached by tokio-postgres; return the
+// underlying DB error directly to Neovim.
+fn unwrap_db_error(err: &tokio_postgres::Error) -> &dyn Error {
+    err.as_db_error().map_or(err, |db_err| db_err)
 }

@@ -1,5 +1,3 @@
-use std::error::Error;
-
 use tokio_postgres::{Client, SimpleQueryMessage};
 
 #[derive(Debug)]
@@ -8,7 +6,7 @@ pub struct QueryResult {
     pub rows: Vec<Vec<String>>,
 }
 
-pub async fn run_query(client: &Client, sql: &str) -> Result<QueryResult, Box<dyn Error>> {
+pub async fn run_query(client: &Client, sql: &str) -> Result<QueryResult, tokio_postgres::Error> {
     let messages = client.simple_query(sql).await?;
 
     let mut cols: Vec<String> = Vec::new();
