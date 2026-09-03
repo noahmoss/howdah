@@ -78,7 +78,7 @@ howdah.connect = function(target)
 end
 howdah.open = function(target)
   howdah.connect(target)
-  local buffer = vim.api.nvim_create_buf(true, true)
+  local buffer = vim.api.nvim_create_buf(true, false)
   vim.api.nvim_set_current_buf(buffer)
   vim.bo.filetype = "sql"
   vim.keymap.set("n", "<localleader>eb", howdah.run, {buffer = buffer, desc = "Howdah: run buffer"})

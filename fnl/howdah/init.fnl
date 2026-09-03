@@ -62,7 +62,8 @@
   "Starts a new Howdah session, initializing a new connection and opening a SQL
   buffer."
   (howdah.connect target)
-  (let [buffer (vim.api.nvim_create_buf true true)]
+  ;; listed = true; scratch = false
+  (let [buffer (vim.api.nvim_create_buf true false)]
     (vim.api.nvim_set_current_buf buffer)
     (set vim.bo.filetype :sql)
     ;; Set up keymaps
