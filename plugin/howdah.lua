@@ -47,8 +47,22 @@ vim.api.nvim_create_user_command("Howdah", function(opts)
 	end
 	local subcommand = subcommands[verb]
 	if not subcommand then
-		vim.notify("Howdah: unknown subcommand '" .. verb .. "'", vim.log.levels.ERROR)
+		vim.notify("Howdah: unknown subcommand '" .. verb .. "' (try :Howdah <Tab>)", vim.log.levels.ERROR)
 		return
 	end
-	subcommand.impl(rest)
+	-- Server-side failures are raised by the rpc helper as a tagged table. Show
+	-- those as a notification; let anything else through unchanged, since that's
+	-- a bug and the Lua traceback is wanted.
+	local ok, err = pcall(subcommand.impl, rest)
+	if not ok then
+		if type(err) == "table" and err["howdah-error"] then
+			-- The server formats error chains one cause per line. Fold that
+			-- into a single line: anything taller than the command line
+			-- triggers a Press-ENTER prompt.
+			local message = err["howdah-error"]:gsub("\nCaused by: ", ": "):gsub("\n", " ")
+			vim.notify("Howdah: " .. message, vim.log.levels.ERROR)
+		else
+			error(err, 0)
+		end
+	end
 end, { nargs = "*", complete = complete_subcommand })

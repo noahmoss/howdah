@@ -1,8 +1,16 @@
 -- [nfnl] fnl/howdah/init.fnl
 local howdah = {}
 local render = require("howdah.render")
+local function howdah_error(err)
+  return error({["howdah-error"] = err})
+end
 local function rpc(method, ...)
-  return vim.rpcrequest(howdah.channel, method, ...)
+  local ok, result = pcall(vim.rpcrequest, howdah.channel, method, ...)
+  if ok then
+    return result
+  else
+    return howdah_error(result)
+  end
 end
 local function resolve_binary()
   local release_path = "target/release/howdah-server"
@@ -44,9 +52,9 @@ local function build_from_pg_vars()
   do
     local tbl_26_ = {}
     local i_27_ = 0
-    for _i, _4_ in ipairs(pg_vars) do
-      local env_var = _4_[1]
-      local key = _4_[2]
+    for _i, _5_ in ipairs(pg_vars) do
+      local env_var = _5_[1]
+      local key = _5_[2]
       local val_28_
       do
         local val = not_empty(vim.env[env_var])

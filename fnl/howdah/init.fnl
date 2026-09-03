@@ -2,8 +2,14 @@
 
 (local render (require :howdah.render))
 
+(fn howdah-error [err]
+  (error {:howdah-error err}))
+
 (fn rpc [method ...]
-  (vim.rpcrequest howdah.channel method ...))
+  "Calls a server method. A server-side failure is re-raised as a table so
+  interactive entrypoints can tell it apart from a plain Lua error (a bug)."
+  (let [(ok result) (pcall vim.rpcrequest howdah.channel method ...)]
+    (if ok result (howdah-error result))))
 
 (fn resolve-binary []
   (let [release-path :target/release/howdah-server
