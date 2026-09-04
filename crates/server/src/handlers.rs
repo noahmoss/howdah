@@ -4,7 +4,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use howdah_core::{QueryResult, run_query};
+use howdah_core::{QueryError, QueryResult, SqlError, run_query};
 use nvim_rs::{Handler, Neovim, Value, compat::tokio::Compat};
 use tokio::fs::File;
 use tokio_postgres::{Client, Config, NoTls};
@@ -104,13 +104,22 @@ impl NeovimHandler {
             ));
         };
 
-        match run_query(&client, sql).await {
-            Ok(result) => Ok(query_result_to_msgpack(result)),
-            Err(err) => Err(Value::from(format!(
-                "execution error: {}",
-                error_chain(unwrap_db_error(&err))
-            ))),
-        }
+        // Neovim only accepts strings on the RPC error channel, so a database
+        // error travels on the Ok side, tagged like a Result: {Ok: ...} or
+        // {Err: ...}. The RPC Err channel is reserved for failures of the
+        // server itself.
+        let (tag, payload) = match run_query(&client, sql).await {
+            Ok(result) => ("Ok", query_result_to_msgpack(result)),
+            Err(QueryError::Sql(info)) => ("Err", sql_error_to_msgpack(info)),
+            Err(QueryError::Other(err)) => {
+                return Err(Value::from(format!(
+                    "execution error: {}",
+                    error_chain(&err)
+                )));
+            }
+        };
+
+        Ok(Value::Map(vec![(Value::from(tag), payload)]))
     }
 }
 
@@ -140,6 +149,38 @@ fn query_result_to_msgpack(result: QueryResult) -> Value {
     Value::Map(vec![
         (Value::from("cols"), col_value),
         (Value::from("rows"), row_values),
+    ])
+}
+
+/// Returns a msgpack map of the Postgres error fields, keyed by field name.
+fn sql_error_to_msgpack(info: SqlError) -> Value {
+    let SqlError {
+        severity,
+        code,
+        message,
+        detail,
+        hint,
+        context,
+        position,
+        internal_position,
+        internal_query,
+    } = info;
+
+    // Option::None converts to Value::Nil
+    fn opt<T: Into<Value>>(value: Option<T>) -> Value {
+        value.map_or(Value::Nil, Into::into)
+    }
+
+    Value::Map(vec![
+        (Value::from("severity"), Value::from(severity)),
+        (Value::from("code"), Value::from(code)),
+        (Value::from("message"), Value::from(message)),
+        (Value::from("detail"), opt(detail)),
+        (Value::from("hint"), opt(hint)),
+        (Value::from("context"), opt(context)),
+        (Value::from("position"), opt(position)),
+        (Value::from("internal_position"), opt(internal_position)),
+        (Value::from("internal_query"), opt(internal_query)),
     ])
 }
 
