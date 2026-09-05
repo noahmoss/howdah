@@ -153,6 +153,7 @@ fn query_result_to_msgpack(result: QueryResult) -> Value {
 }
 
 /// Returns a msgpack map of the Postgres error fields, keyed by field name.
+/// Optional fields Postgres did not send are omitted rather than sent as nil.
 fn sql_error_to_msgpack(info: SqlError) -> Value {
     let SqlError {
         severity,
@@ -166,22 +167,26 @@ fn sql_error_to_msgpack(info: SqlError) -> Value {
         internal_query,
     } = info;
 
-    // Option::None converts to Value::Nil
-    fn opt<T: Into<Value>>(value: Option<T>) -> Value {
-        value.map_or(Value::Nil, Into::into)
-    }
-
-    Value::Map(vec![
+    let mut fields = vec![
         (Value::from("severity"), Value::from(severity)),
         (Value::from("code"), Value::from(code)),
         (Value::from("message"), Value::from(message)),
-        (Value::from("detail"), opt(detail)),
-        (Value::from("hint"), opt(hint)),
-        (Value::from("context"), opt(context)),
-        (Value::from("position"), opt(position)),
-        (Value::from("internal_position"), opt(internal_position)),
-        (Value::from("internal_query"), opt(internal_query)),
-    ])
+    ];
+
+    fn push_some<T: Into<Value>>(fields: &mut Vec<(Value, Value)>, key: &str, value: Option<T>) {
+        if let Some(value) = value {
+            fields.push((Value::from(key), value.into()));
+        }
+    }
+
+    push_some(&mut fields, "detail", detail);
+    push_some(&mut fields, "hint", hint);
+    push_some(&mut fields, "context", context);
+    push_some(&mut fields, "position", position);
+    push_some(&mut fields, "internal_position", internal_position);
+    push_some(&mut fields, "internal_query", internal_query);
+
+    Value::Map(fields)
 }
 
 /// Returns an error formatted with its chain of causes, one per line

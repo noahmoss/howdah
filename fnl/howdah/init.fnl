@@ -1,6 +1,7 @@
 (local howdah {})
 
 (local render (require :howdah.render))
+(local errors (require :howdah.errors))
 
 (fn howdah-error [err]
   (error {:howdah-error err}))
@@ -81,16 +82,32 @@
 (fn howdah.query [sql]
   (rpc :query sql))
 
+(fn run-sql [sql start]
+  "Runs sql and renders the outcome. start is how much of the current buffer
+  precedes sql, as [rows bytes], used to map error positions back onto the
+  buffer."
+  (let [buffer (vim.api.nvim_get_current_buf)]
+    (errors.clear-diagnostic buffer)
+    (case (howdah.query sql)
+      {:Ok result} (render.show result)
+      {:Err err} (do
+                   (render.display (errors.format err sql start))
+                   (errors.set-diagnostic buffer err sql start)))))
+
 (fn howdah.run []
-  (let [lines (vim.api.nvim_buf_get_lines 0 0 -1 false)
-        sql (table.concat lines "\n")]
-    (render.show (howdah.query sql))))
+  (let [lines (vim.api.nvim_buf_get_lines 0 0 -1 false)]
+    (run-sql (table.concat lines "\n") [0 0])))
 
 (fn howdah.run-selection []
-  (let [lines (vim.fn.getregion (vim.fn.getpos :v) (vim.fn.getpos ".")
-                                {:type (vim.fn.mode)})
-        sql (table.concat lines "\n")]
-    (render.show (howdah.query sql))))
+  (let [start (vim.fn.getpos :v)
+        end (vim.fn.getpos ".")
+        opts {:type (vim.fn.mode)}
+        lines (vim.fn.getregion start end opts)
+        ;; getregionpos sorts the segments, so the first one starts the selection
+        [[[_ line col]]] (vim.fn.getregionpos start end opts)]
+    ;; The selection starts at (line, col), so line-1 rows and col-1 bytes
+    ;; of the buffer precede it
+    (run-sql (table.concat lines "\n") [(- line 1) (- col 1)])))
 
 (comment (howdah.start)
   (howdah.connect "host=localhost user=noahmoss dbname=howdah_dev")

@@ -37,12 +37,14 @@
     (set results-buffer (vim.api.nvim_create_buf false true)))
   results-buffer)
 
-(fn render.show [{: cols : rows}]
-  (let [lines (format-results cols rows)
-        buffer (get-or-create-results-buffer)]
+(fn render.display [lines]
+  "Replaces the results buffer contents with lines, opening its split if needed."
+  (let [buffer (get-or-create-results-buffer)]
     (vim.api.nvim_buf_set_lines buffer 0 -1 false lines)
-    ;; Open a window for the buffer in a horizontal split when not already open
     (when (= -1 (vim.fn.bufwinid buffer))
       (vim.api.nvim_open_win buffer false {:split :below}))))
+
+(fn render.show [{: cols : rows}]
+  (render.display (format-results cols rows)))
 
 render

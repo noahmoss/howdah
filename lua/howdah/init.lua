@@ -1,6 +1,7 @@
 -- [nfnl] fnl/howdah/init.fnl
 local howdah = {}
 local render = require("howdah.render")
+local errors = require("howdah.errors")
 local function howdah_error(err)
   return error({["howdah-error"] = err})
 end
@@ -95,15 +96,37 @@ end
 howdah.query = function(sql)
   return rpc("query", sql)
 end
+local function run_sql(sql, start)
+  local buffer = vim.api.nvim_get_current_buf()
+  errors["clear-diagnostic"](buffer)
+  local case_9_ = howdah.query(sql)
+  if ((_G.type(case_9_) == "table") and (nil ~= case_9_.Ok)) then
+    local result = case_9_.Ok
+    return render.show(result)
+  elseif ((_G.type(case_9_) == "table") and (nil ~= case_9_.Err)) then
+    local err = case_9_.Err
+    render.display(errors.format(err, sql, start))
+    return errors["set-diagnostic"](buffer, err, sql, start)
+  else
+    return nil
+  end
+end
 howdah.run = function()
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-  local sql = table.concat(lines, "\n")
-  return render.show(howdah.query(sql))
+  return run_sql(table.concat(lines, "\n"), {0, 0})
 end
 howdah["run-selection"] = function()
-  local lines = vim.fn.getregion(vim.fn.getpos("v"), vim.fn.getpos("."), {type = vim.fn.mode()})
-  local sql = table.concat(lines, "\n")
-  return render.show(howdah.query(sql))
+  local start = vim.fn.getpos("v")
+  local _end = vim.fn.getpos(".")
+  local opts = {type = vim.fn.mode()}
+  local lines = vim.fn.getregion(start, _end, opts)
+  local _let_11_ = vim.fn.getregionpos(start, _end, opts)
+  local _let_12_ = _let_11_[1]
+  local _let_13_ = _let_12_[1]
+  local _ = _let_13_[1]
+  local line = _let_13_[2]
+  local col = _let_13_[3]
+  return run_sql(table.concat(lines, "\n"), {(line - 1), (col - 1)})
 end
 --[[ (howdah.start) (howdah.connect "host=localhost user=noahmoss dbname=howdah_dev") (render.show (howdah.query "select 1")) ]]
 return howdah

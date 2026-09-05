@@ -69,10 +69,7 @@ local function get_or_create_results_buffer()
   end
   return results_buffer
 end
-render.show = function(_6_)
-  local cols = _6_.cols
-  local rows = _6_.rows
-  local lines = format_results(cols, rows)
+render.display = function(lines)
   local buffer = get_or_create_results_buffer()
   vim.api.nvim_buf_set_lines(buffer, 0, -1, false, lines)
   if (-1 == vim.fn.bufwinid(buffer)) then
@@ -80,5 +77,10 @@ render.show = function(_6_)
   else
     return nil
   end
+end
+render.show = function(_7_)
+  local cols = _7_.cols
+  local rows = _7_.rows
+  return render.display(format_results(cols, rows))
 end
 return render
