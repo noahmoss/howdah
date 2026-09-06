@@ -82,16 +82,22 @@
 (fn howdah.query [sql]
   (rpc :query sql))
 
+(fn show-outcome [buffer outcome sql start]
+  "Renders one statement's outcome: its results, or the error with a
+  diagnostic on the query buffer."
+  (case outcome
+    {:ok result} (render.show result)
+    {:err err} (do
+                 (render.display (errors.format err sql start))
+                 (errors.set-diagnostic buffer err sql start))))
+
 (fn run-sql [sql start]
-  "Runs sql and renders the outcome. start is the zero-based row and byte
-  column where sql begins in the current buffer."
-  (let [buffer (vim.api.nvim_get_current_buf)]
+  "Runs sql, one outcome per statement, and renders the last. start is the
+  zero-based row and byte column where sql begins in the current buffer."
+  (let [buffer (vim.api.nvim_get_current_buf)
+        outcomes (howdah.query sql)]
     (errors.clear-diagnostic buffer)
-    (case (howdah.query sql)
-      {:Ok result} (render.show result)
-      {:Err err} (do
-                   (render.display (errors.format err sql start))
-                   (errors.set-diagnostic buffer err sql start)))))
+    (show-outcome buffer (. outcomes (length outcomes)) sql start)))
 
 (fn howdah.run []
   (let [lines (vim.api.nvim_buf_get_lines 0 0 -1 false)]
@@ -110,6 +116,6 @@
 
 (comment (howdah.start)
   (howdah.connect "host=localhost user=noahmoss dbname=howdah_dev")
-  (render.show (howdah.query "select 1")))
+  (howdah.query "select 1; select 2"))
 
 howdah

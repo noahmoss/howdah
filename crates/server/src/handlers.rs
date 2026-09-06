@@ -4,7 +4,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use howdah_core::{QueryError, QueryResult, SqlError, run_query};
+use howdah_core::{QueryResult, SqlError, StatementResult, run_query};
 use nvim_rs::{Handler, Neovim, Value, compat::tokio::Compat};
 use tokio::fs::File;
 use tokio_postgres::{Client, Config, NoTls};
@@ -102,22 +102,17 @@ impl NeovimHandler {
             ));
         };
 
-        // Neovim only accepts strings on the RPC error channel, so a database
-        // error travels on the Ok side, tagged like a Result: {Ok: ...} or
-        // {Err: ...}. The RPC Err channel is reserved for failures of the
-        // server itself.
-        let (tag, payload) = match run_query(&client, sql).await {
-            Ok(result) => ("Ok", query_result_to_msgpack(result)),
-            Err(QueryError::Sql(info)) => ("Err", sql_error_to_msgpack(info)),
-            Err(QueryError::Other(err)) => {
-                return Err(Value::from(format!(
-                    "execution error: {}",
-                    error_chain(&err)
-                )));
-            }
-        };
+        // Only server failures use the RPC error channel; SQL errors are data.
+        let results = run_query(&client, sql)
+            .await
+            .map_err(|err| Value::from(format!("execution error: {}", error_chain(&err))))?;
 
-        Ok(Value::Map(vec![(Value::from(tag), payload)]))
+        Ok(Value::Array(
+            results
+                .into_iter()
+                .map(statement_result_to_msgpack)
+                .collect(),
+        ))
     }
 }
 
@@ -131,6 +126,14 @@ fn build_config(connection_string: &str) -> Result<Config, tokio_postgres::Error
     };
 
     Ok(config)
+}
+
+fn statement_result_to_msgpack(result: StatementResult) -> Value {
+    let (tag, payload) = match result {
+        Ok(result) => ("ok", query_result_to_msgpack(result)),
+        Err(error) => ("err", sql_error_to_msgpack(error)),
+    };
+    Value::Map(vec![(Value::from(tag), payload)])
 }
 
 /// Returns a msgpack value representing the query results, with `cols`
@@ -149,17 +152,6 @@ fn query_result_to_msgpack(result: QueryResult) -> Value {
     ];
     push_some(&mut fields, "cols", cols.map(string_array));
     Value::Map(fields)
-}
-
-fn string_array(strings: Vec<String>) -> Value {
-    Value::Array(strings.into_iter().map(Value::from).collect())
-}
-
-/// Appends `key: value` to a msgpack map's fields when the value is present.
-fn push_some<T: Into<Value>>(fields: &mut Vec<(Value, Value)>, key: &str, value: Option<T>) {
-    if let Some(value) = value {
-        fields.push((Value::from(key), value.into()));
-    }
 }
 
 /// Returns a msgpack map of the Postgres error fields, keyed by field name.
@@ -191,6 +183,17 @@ fn sql_error_to_msgpack(info: SqlError) -> Value {
     push_some(&mut fields, "internal_query", internal_query);
 
     Value::Map(fields)
+}
+
+fn string_array(strings: Vec<String>) -> Value {
+    Value::Array(strings.into_iter().map(Value::from).collect())
+}
+
+/// Appends `key: value` to a msgpack map's fields when the value is present.
+fn push_some<T: Into<Value>>(fields: &mut Vec<(Value, Value)>, key: &str, value: Option<T>) {
+    if let Some(value) = value {
+        fields.push((Value::from(key), value.into()));
+    }
 }
 
 /// Returns an error formatted with its chain of causes, one per line

@@ -1,9 +1,10 @@
+use futures_util::StreamExt;
 use tokio_postgres::{
     Client, SimpleColumn, SimpleQueryMessage, SimpleQueryRow,
     error::{DbError, ErrorPosition},
 };
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct QueryResult {
     /// None when the statement returns no result set (e.g. DDL).
     pub cols: Option<Vec<String>>,
@@ -11,6 +12,8 @@ pub struct QueryResult {
     /// Rows returned or affected, per CommandComplete.
     pub row_count: u64,
 }
+
+pub type StatementResult = Result<QueryResult, SqlError>;
 
 #[derive(Debug)]
 pub struct SqlError {
@@ -23,12 +26,6 @@ pub struct SqlError {
     pub position: Option<u32>,
     pub internal_position: Option<u32>,
     pub internal_query: Option<String>,
-}
-
-#[derive(Debug)]
-pub enum QueryError {
-    Sql(SqlError),
-    Other(tokio_postgres::Error),
 }
 
 impl From<&DbError> for SqlError {
@@ -54,36 +51,40 @@ impl From<&DbError> for SqlError {
     }
 }
 
-impl From<tokio_postgres::Error> for QueryError {
-    fn from(err: tokio_postgres::Error) -> Self {
-        match err.as_db_error() {
-            Some(db_error) => QueryError::Sql(db_error.into()),
-            None => QueryError::Other(err),
-        }
-    }
-}
+pub async fn run_query(
+    client: &Client,
+    sql: &str,
+) -> Result<Vec<StatementResult>, tokio_postgres::Error> {
+    let stream = client.simple_query_raw(sql).await?;
+    tokio::pin!(stream);
 
-pub async fn run_query(client: &Client, sql: &str) -> Result<QueryResult, QueryError> {
-    let messages = client.simple_query(sql).await?;
+    let mut results = Vec::new();
+    let mut current = QueryResult::default();
 
-    let mut cols: Option<Vec<String>> = None;
-    let mut rows: Vec<Vec<String>> = Vec::new();
-    let mut row_count: u64 = 0;
-    for msg in messages {
+    while let Some(msg) = stream.next().await {
+        let msg = match msg {
+            Ok(msg) => msg,
+            Err(err) => match err.as_db_error() {
+                Some(db_error) => {
+                    results.push(Err(db_error.into()));
+                    break;
+                }
+                None => return Err(err),
+            },
+        };
         match msg {
-            SimpleQueryMessage::RowDescription(desc) => cols = Some(column_names(&desc)),
-            SimpleQueryMessage::Row(row) => rows.push(cells(&row)),
-            // One per statement; last wins, like cols.
-            SimpleQueryMessage::CommandComplete(count) => row_count = count,
+            SimpleQueryMessage::RowDescription(desc) => current.cols = Some(column_names(&desc)),
+            SimpleQueryMessage::Row(row) => current.rows.push(cells(&row)),
+            SimpleQueryMessage::CommandComplete(count) => {
+                current.row_count = count;
+                results.push(Ok(current));
+                current = QueryResult::default();
+            }
             _ => {}
         }
     }
 
-    Ok(QueryResult {
-        cols,
-        rows,
-        row_count,
-    })
+    Ok(results)
 }
 
 fn column_names(desc: &[SimpleColumn]) -> Vec<String> {

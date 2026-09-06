@@ -81,6 +81,13 @@ end
 render.show = function(_7_)
   local cols = _7_.cols
   local rows = _7_.rows
-  return render.display(format_results(cols, rows))
+  local function _8_()
+    if cols then
+      return format_results(cols, rows)
+    else
+      return {}
+    end
+  end
+  return render.display(_8_())
 end
 return render

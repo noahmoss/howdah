@@ -96,20 +96,23 @@ end
 howdah.query = function(sql)
   return rpc("query", sql)
 end
-local function run_sql(sql, start)
-  local buffer = vim.api.nvim_get_current_buf()
-  errors["clear-diagnostic"](buffer)
-  local case_9_ = howdah.query(sql)
-  if ((_G.type(case_9_) == "table") and (nil ~= case_9_.Ok)) then
-    local result = case_9_.Ok
+local function show_outcome(buffer, outcome, sql, start)
+  if ((_G.type(outcome) == "table") and (nil ~= outcome.ok)) then
+    local result = outcome.ok
     return render.show(result)
-  elseif ((_G.type(case_9_) == "table") and (nil ~= case_9_.Err)) then
-    local err = case_9_.Err
+  elseif ((_G.type(outcome) == "table") and (nil ~= outcome.err)) then
+    local err = outcome.err
     render.display(errors.format(err, sql, start))
     return errors["set-diagnostic"](buffer, err, sql, start)
   else
     return nil
   end
+end
+local function run_sql(sql, start)
+  local buffer = vim.api.nvim_get_current_buf()
+  local outcomes = howdah.query(sql)
+  errors["clear-diagnostic"](buffer)
+  return show_outcome(buffer, outcomes[#outcomes], sql, start)
 end
 howdah.run = function()
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
@@ -120,13 +123,13 @@ howdah["run-selection"] = function()
   local _end = vim.fn.getpos(".")
   local opts = {type = vim.fn.mode()}
   local lines = vim.fn.getregion(start, _end, opts)
-  local _let_11_ = vim.fn.getregionpos(start, _end, opts)
+  local _let_10_ = vim.fn.getregionpos(start, _end, opts)
+  local _let_11_ = _let_10_[1]
   local _let_12_ = _let_11_[1]
-  local _let_13_ = _let_12_[1]
-  local _ = _let_13_[1]
-  local line = _let_13_[2]
-  local col = _let_13_[3]
+  local _ = _let_12_[1]
+  local line = _let_12_[2]
+  local col = _let_12_[3]
   return run_sql(table.concat(lines, "\n"), {row = (line - 1), ["byte-col"] = (col - 1)})
 end
---[[ (howdah.start) (howdah.connect "host=localhost user=noahmoss dbname=howdah_dev") (render.show (howdah.query "select 1")) ]]
+--[[ (howdah.start) (howdah.connect "host=localhost user=noahmoss dbname=howdah_dev") (howdah.query "select 1; select 2") ]]
 return howdah

@@ -45,6 +45,8 @@
       (vim.api.nvim_open_win buffer false {:split :below}))))
 
 (fn render.show [{: cols : rows}]
-  (render.display (format-results cols rows)))
+  "Shows a statement's results; a statement without a result set clears the
+  buffer for now."
+  (render.display (if cols (format-results cols rows) [])))
 
 render
