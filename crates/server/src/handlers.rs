@@ -134,20 +134,32 @@ fn build_config(connection_string: &str) -> Result<Config, tokio_postgres::Error
 }
 
 /// Returns a msgpack value representing the query results, with `cols`
-/// formatted as an array of strings, and `rows` formatted as an array of arrays
-/// of strings.
+/// formatted as an array of strings (omitted when there is no result set),
+/// `rows` as an array of arrays of strings, and `row_count` as an integer.
 fn query_result_to_msgpack(result: QueryResult) -> Value {
-    let QueryResult { rows, cols } = result;
-    let col_value = Value::Array(cols.into_iter().map(Value::from).collect());
-    let row_values = Value::Array(
-        rows.into_iter()
-            .map(|row| Value::Array(row.into_iter().map(Value::from).collect()))
-            .collect(),
-    );
-    Value::Map(vec![
-        (Value::from("cols"), col_value),
+    let QueryResult {
+        rows,
+        cols,
+        row_count,
+    } = result;
+    let row_values = Value::Array(rows.into_iter().map(string_array).collect());
+    let mut fields = vec![
         (Value::from("rows"), row_values),
-    ])
+        (Value::from("row_count"), Value::from(row_count)),
+    ];
+    push_some(&mut fields, "cols", cols.map(string_array));
+    Value::Map(fields)
+}
+
+fn string_array(strings: Vec<String>) -> Value {
+    Value::Array(strings.into_iter().map(Value::from).collect())
+}
+
+/// Appends `key: value` to a msgpack map's fields when the value is present.
+fn push_some<T: Into<Value>>(fields: &mut Vec<(Value, Value)>, key: &str, value: Option<T>) {
+    if let Some(value) = value {
+        fields.push((Value::from(key), value.into()));
+    }
 }
 
 /// Returns a msgpack map of the Postgres error fields, keyed by field name.
@@ -170,12 +182,6 @@ fn sql_error_to_msgpack(info: SqlError) -> Value {
         (Value::from("code"), Value::from(code)),
         (Value::from("message"), Value::from(message)),
     ];
-
-    fn push_some<T: Into<Value>>(fields: &mut Vec<(Value, Value)>, key: &str, value: Option<T>) {
-        if let Some(value) = value {
-            fields.push((Value::from(key), value.into()));
-        }
-    }
 
     push_some(&mut fields, "detail", detail);
     push_some(&mut fields, "hint", hint);

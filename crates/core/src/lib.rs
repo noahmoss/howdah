@@ -1,12 +1,15 @@
 use tokio_postgres::{
-    Client, SimpleQueryMessage,
+    Client, SimpleColumn, SimpleQueryMessage, SimpleQueryRow,
     error::{DbError, ErrorPosition},
 };
 
 #[derive(Debug)]
 pub struct QueryResult {
-    pub cols: Vec<String>,
+    /// None when the statement returns no result set (e.g. DDL).
+    pub cols: Option<Vec<String>>,
     pub rows: Vec<Vec<String>>,
+    /// Rows returned or affected, per CommandComplete.
+    pub row_count: u64,
 }
 
 #[derive(Debug)]
@@ -63,27 +66,32 @@ impl From<tokio_postgres::Error> for QueryError {
 pub async fn run_query(client: &Client, sql: &str) -> Result<QueryResult, QueryError> {
     let messages = client.simple_query(sql).await?;
 
-    let mut cols: Vec<String> = Vec::new();
+    let mut cols: Option<Vec<String>> = None;
     let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut row_count: u64 = 0;
     for msg in messages {
         match msg {
-            SimpleQueryMessage::RowDescription(desc) => {
-                cols = desc.iter().map(|col| col.name().to_string()).collect();
-            }
-            SimpleQueryMessage::Row(row) => {
-                let mut cells: Vec<String> = Vec::new();
-                for idx in 0..row.len() {
-                    let cell = match row.get(idx) {
-                        Some(s) => s.to_string(),
-                        None => "NULL".to_string(),
-                    };
-                    cells.push(cell)
-                }
-                rows.push(cells)
-            }
+            SimpleQueryMessage::RowDescription(desc) => cols = Some(column_names(&desc)),
+            SimpleQueryMessage::Row(row) => rows.push(cells(&row)),
+            // One per statement; last wins, like cols.
+            SimpleQueryMessage::CommandComplete(count) => row_count = count,
             _ => {}
         }
     }
 
-    Ok(QueryResult { cols, rows })
+    Ok(QueryResult {
+        cols,
+        rows,
+        row_count,
+    })
+}
+
+fn column_names(desc: &[SimpleColumn]) -> Vec<String> {
+    desc.iter().map(|col| col.name().to_string()).collect()
+}
+
+fn cells(row: &SimpleQueryRow) -> Vec<String> {
+    (0..row.len())
+        .map(|i| row.get(i).unwrap_or("NULL").to_string())
+        .collect()
 }
