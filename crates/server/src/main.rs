@@ -4,6 +4,7 @@ use handlers::{NeovimHandler, error_chain};
 use nvim_rs::create::tokio as create;
 
 mod handlers;
+mod protocol;
 
 // TODO: add error logging not to stderr
 #[tokio::main]
