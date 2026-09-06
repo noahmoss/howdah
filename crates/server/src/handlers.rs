@@ -58,16 +58,14 @@ impl NeovimHandler {
 
         let config = build_config(connection_string).map_err(|e| {
             Value::from(format!(
-                "failed to parse connection string {}: {}",
-                connection_string,
+                "failed to parse connection string: {}",
                 error_chain(unwrap_db_error(&e))
             ))
         })?;
 
         let (client, connection) = config.connect(NoTls).await.map_err(|e| {
             Value::from(format!(
-                "failed to connect to {}: {}",
-                connection_string,
+                "failed to connect: {}",
                 error_chain(unwrap_db_error(&e))
             ))
         })?;
