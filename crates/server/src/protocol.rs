@@ -1,5 +1,11 @@
 use howdah_core::{QueryResult, SqlError, StatementResult};
 use nvim_rs::Value;
+use serde::de::DeserializeOwned;
+
+pub(crate) fn decode_args<T: DeserializeOwned>(method: &str, args: Vec<Value>) -> Result<T, Value> {
+    rmpv::ext::from_value(Value::Array(args))
+        .map_err(|err| Value::from(format!("invalid arguments for method \"{method}\": {err}")))
+}
 
 pub(crate) fn statement_result_to_msgpack(result: StatementResult) -> Value {
     let (tag, payload) = match result {
@@ -66,5 +72,44 @@ fn string_array(strings: Vec<String>) -> Value {
 fn push_some<T: Into<Value>>(fields: &mut Vec<(Value, Value)>, key: &str, value: Option<T>) {
     if let Some(value) = value {
         fields.push((Value::from(key), value.into()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nvim_rs::Value;
+
+    use super::decode_args;
+
+    #[test]
+    fn decodes_one_string_argument() {
+        for text in ["", "host=localhost dbname=howdah_dev", "select 'café'"] {
+            let (decoded,): (String,) = decode_args("query", vec![Value::from(text)]).unwrap();
+            assert_eq!(decoded, text);
+        }
+    }
+
+    #[test]
+    fn rejects_missing_or_extra_arguments() {
+        for args in [vec![], vec![Value::from("one"), Value::from("two")]] {
+            assert!(decode_args::<(String,)>("query", args).is_err());
+        }
+    }
+
+    #[test]
+    fn rejects_wrong_types_with_method_context() {
+        for arg in [
+            Value::Nil,
+            Value::from(42),
+            Value::from(true),
+            Value::Array(vec![]),
+        ] {
+            let err = decode_args::<(String,)>("connect", vec![arg]).unwrap_err();
+            assert!(
+                err.as_str()
+                    .unwrap()
+                    .starts_with("invalid arguments for method \"connect\": ")
+            );
+        }
     }
 }

@@ -9,7 +9,7 @@ use nvim_rs::{Handler, Neovim, Value, compat::tokio::Compat};
 use tokio::fs::File;
 use tokio_postgres::{Client, Config, NoTls};
 
-use crate::protocol::statement_result_to_msgpack;
+use crate::protocol::{decode_args, statement_result_to_msgpack};
 
 #[derive(Clone, Debug)]
 pub struct NeovimHandler {
@@ -27,8 +27,14 @@ impl Handler for NeovimHandler {
         _neovim: Neovim<Compat<File>>,
     ) -> Result<Value, Value> {
         match name.as_ref() {
-            "connect" => self.handle_connect(args).await,
-            "query" => self.handle_query(args).await,
+            "connect" => {
+                let (connection_string,): (String,) = decode_args(&name, args)?;
+                self.handle_connect(&connection_string).await
+            }
+            "query" => {
+                let (sql,): (String,) = decode_args(&name, args)?;
+                self.handle_query(&sql).await
+            }
             _ => Err(Value::from(format!("unknown method: {}", name))),
         }
     }
@@ -43,21 +49,7 @@ impl NeovimHandler {
         self.client.lock().unwrap().as_ref().map(Arc::clone)
     }
 
-    async fn handle_connect(&self, args: Vec<Value>) -> Result<Value, Value> {
-        if args.len() != 1 {
-            return Err(Value::from(format!(
-                "method \"connect\" expects 1 arg, received {}",
-                args.len()
-            )));
-        }
-
-        let Some(connection_string) = args[0].as_str() else {
-            return Err(Value::from(format!(
-                "method \"connect\" expects string, received {}",
-                &args[0]
-            )));
-        };
-
+    async fn handle_connect(&self, connection_string: &str) -> Result<Value, Value> {
         let config = build_config(connection_string).map_err(|e| {
             Value::from(format!(
                 "failed to parse connection string: {}",
@@ -83,21 +75,7 @@ impl NeovimHandler {
         Ok(Value::Nil)
     }
 
-    async fn handle_query(&self, args: Vec<Value>) -> Result<Value, Value> {
-        if args.len() != 1 {
-            return Err(Value::from(format!(
-                "method \"query\" expects 1 arg, received {}",
-                args.len()
-            )));
-        }
-
-        let Some(sql) = args[0].as_str() else {
-            return Err(Value::from(format!(
-                "method \"query\" expects string, received {}",
-                &args[0]
-            )));
-        };
-
+    async fn handle_query(&self, sql: &str) -> Result<Value, Value> {
         let Some(client) = self.current_client() else {
             return Err(Value::from(
                 "not connected to a database (call connect() first)",
