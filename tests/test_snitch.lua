@@ -69,6 +69,15 @@ local function mutate()
   end
   return {n, m}
 end
+local function mutate_field(state)
+  do
+    _G["snitch"] = {}
+    _G.snitch["state"] = state
+    _G["state"] = state
+  end
+  state.value = 2
+  return state.value
+end
 local function nested()
   do
     _G["snitch"] = {}
@@ -144,26 +153,32 @@ local function _7_()
 end
 T["captures var, set and local"] = _7_
 local function _8_()
+  local state = {value = 1}
+  expect.equality(mutate_field(state), 2)
+  return expect.equality(_G.snitch, {state = state})
+end
+T["does not capture dotted set targets as bindings"] = _8_
+local function _9_()
   expect.equality(nested(), 3)
   return expect.equality(_G.snitch, {outer = 1, inner = 2})
 end
-T["captures nested lets"] = _8_
-local function _9_()
+T["captures nested lets"] = _9_
+local function _10_()
   bind()
   add(1, 2)
   return expect.equality(_G.snitch, {a = 1, b = 2})
 end
-T["starts from an empty table on each call"] = _9_
-local function _10_()
+T["starts from an empty table on each call"] = _10_
+local function _11_()
   expect.equality(rest_args(1, 2, 3), {2, 3})
   expect.equality(_G.snitch, {head = 1, tail = {2, 3}})
   expect.equality(varargs(1, 2), 2)
   return expect.equality(_G.snitch, {})
 end
-T["captures rest args and skips varargs"] = _10_
-local function _11_()
+T["captures rest args and skips varargs"] = _11_
+local function _12_()
   expect.equality(whole(), {1, 2})
   return expect.equality(_G.snitch, {a = 1, all = {1, 2}})
 end
-T["captures &as bindings"] = _11_
+T["captures &as bindings"] = _12_
 return T

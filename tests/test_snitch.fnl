@@ -24,6 +24,10 @@
   (local m (* n 10))
   [n m])
 
+(fn* mutate-field [state]
+  (set state.value 2)
+  state.value)
+
 (fn* nested []
   (let [outer 1]
     (let [inner (+ outer 1)]
@@ -65,6 +69,12 @@
   (fn []
     (expect.equality (mutate) [1 10])
     (expect.equality _G.snitch {:n 1 :m 10})))
+
+(tset T "does not capture dotted set targets as bindings"
+  (fn []
+    (let [state {:value 1}]
+      (expect.equality (mutate-field state) 2)
+      (expect.equality _G.snitch {: state}))))
 
 (tset T "captures nested lets"
   (fn []

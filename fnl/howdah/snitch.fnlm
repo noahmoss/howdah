@@ -46,7 +46,7 @@
     (record (list (sym :do)) syms)))
 
 (fn plain-sym? [x]
-  (and (sym? x) (not (: (tostring x) :find "%." 1 true))))
+  (and (sym? x) (not (: (tostring x) :find "." 1 true))))
 
 (fn binding-form-syms [form]
   "For a (local pat v), (var pat v) or (set sym v) form, the symbols it binds."
