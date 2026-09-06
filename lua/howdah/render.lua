@@ -1,5 +1,6 @@
 -- [nfnl] fnl/howdah/render.fnl
 local render = {}
+local errors = require("howdah.errors")
 local function cell_width(s)
   return vim.fn.strdisplaywidth(s)
 end
@@ -49,17 +50,52 @@ local function separator(widths)
   end
   return table.concat(_3_, "-+-")
 end
-local function format_results(cols, rows)
-  local widths = compute_widths(cols, rows)
-  local header = format_row(cols, widths)
-  local sep = separator(widths)
-  local lines = {header, sep}
-  local tbl_24_ = lines
-  for _, row in ipairs(rows) do
-    local val_25_ = format_row(row, widths)
-    table.insert(tbl_24_, val_25_)
+render["format-table"] = function(_5_)
+  local cols = _5_.cols
+  local rows = _5_.rows
+  if cols then
+    local widths = compute_widths(cols, rows)
+    local header = format_row(cols, widths)
+    local sep = separator(widths)
+    local lines = {header, sep}
+    local tbl_24_ = lines
+    for _, row in ipairs(rows) do
+      local val_25_ = format_row(row, widths)
+      table.insert(tbl_24_, val_25_)
+    end
+    return tbl_24_
+  else
+    return {}
   end
-  return tbl_24_
+end
+local function plural(n, word)
+  local _7_
+  if (n == 1) then
+    _7_ = ""
+  else
+    _7_ = "s"
+  end
+  return (n .. " " .. word .. _7_)
+end
+render.summary = function(_9_)
+  local cols = _9_.cols
+  local row_count = _9_.row_count
+  if cols then
+    return plural(row_count, "row")
+  elseif (row_count == 0) then
+    return "done"
+  else
+    return (plural(row_count, "row") .. " affected")
+  end
+end
+render.status = function(summary, _11_)
+  local index = _11_.index
+  local total = _11_.total
+  if (total > 1) then
+    return (summary .. " \194\183 statement " .. index .. " of " .. total)
+  else
+    return summary
+  end
 end
 local results_buffer = nil
 local function get_or_create_results_buffer()
@@ -69,25 +105,27 @@ local function get_or_create_results_buffer()
   end
   return results_buffer
 end
-render.display = function(lines)
+render.display = function(lines, status)
   local buffer = get_or_create_results_buffer()
   vim.api.nvim_buf_set_lines(buffer, 0, -1, false, lines)
-  if (-1 == vim.fn.bufwinid(buffer)) then
-    return vim.api.nvim_open_win(buffer, false, {split = "below"})
+  local window = vim.fn.bufwinid(buffer)
+  local window0
+  if (window == -1) then
+    window0 = vim.api.nvim_open_win(buffer, false, {split = "below"})
+  else
+    window0 = window
+  end
+  return vim.api.nvim_set_option_value("statusline", (" howdah results%=" .. status .. " "), {win = window0})
+end
+render.show = function(result, statement_position, sql, sql_start)
+  if ((_G.type(result) == "table") and (nil ~= result.ok)) then
+    local query_result = result.ok
+    return render.display(render["format-table"](query_result), render.status(render.summary(query_result), statement_position))
+  elseif ((_G.type(result) == "table") and (nil ~= result.err)) then
+    local err = result.err
+    return render.display(errors.format(err, sql, sql_start), render.status("error", statement_position))
   else
     return nil
   end
-end
-render.show = function(_7_)
-  local cols = _7_.cols
-  local rows = _7_.rows
-  local function _8_()
-    if cols then
-      return format_results(cols, rows)
-    else
-      return {}
-    end
-  end
-  return render.display(_8_())
 end
 return render

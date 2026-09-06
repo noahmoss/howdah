@@ -43,10 +43,10 @@ local function detail_lines(err)
   end
   return tbl_26_
 end
-local function buffer_query_lines(err, sql, start)
+local function buffer_query_lines(err, sql, sql_start)
   if err.position then
     local location = locate(sql, err.position)
-    local buffer_line = (start.row + location.row + 1)
+    local buffer_line = (sql_start.row + location.row + 1)
     local label = ("LINE " .. buffer_line)
     return positioned_lines(label, location)
   else
@@ -62,8 +62,8 @@ local function internal_query_lines(err)
     return {}
   end
 end
-errors.format = function(err, sql, start)
-  return vim.split(vim.iter({headline(err), detail_lines(err), buffer_query_lines(err, sql, start), internal_query_lines(err)}):flatten():join("\n"), "\n")
+errors.format = function(err, sql, sql_start)
+  return vim.split(vim.iter({headline(err), detail_lines(err), buffer_query_lines(err, sql, sql_start), internal_query_lines(err)}):flatten():join("\n"), "\n")
 end
 local diagnostics_ns = vim.api.nvim_create_namespace("howdah")
 local function diagnostic_severity(severity)
@@ -76,29 +76,29 @@ local function diagnostic_severity(severity)
     return vim.diagnostic.severity.INFO
   end
 end
-local function buffer_position(sql, position, start)
+local function buffer_position(sql, position, sql_start)
   local _let_7_ = locate(sql, position)
   local row = _let_7_.row
   local char_col = _let_7_["char-col"]
   local text = _let_7_.text
   local byte_col = vim.str_byteindex(text, "utf-32", char_col)
-  local start_byte_col
+  local sql_start_byte_col
   if (row == 0) then
-    start_byte_col = start["byte-col"]
+    sql_start_byte_col = sql_start["byte-col"]
   else
-    start_byte_col = 0
+    sql_start_byte_col = 0
   end
-  return {lnum = (start.row + row), col = (start_byte_col + byte_col)}
+  return {lnum = (sql_start.row + row), col = (sql_start_byte_col + byte_col)}
 end
-local function diagnostic(err, sql, start)
-  local _let_9_ = buffer_position(sql, err.position, start)
+local function diagnostic(err, sql, sql_start)
+  local _let_9_ = buffer_position(sql, err.position, sql_start)
   local lnum = _let_9_.lnum
   local col = _let_9_.col
   return {lnum = lnum, col = col, message = err.message, severity = diagnostic_severity(err.severity), code = err.code, source = "howdah"}
 end
-errors["set-diagnostic"] = function(buffer, err, sql, start)
+errors["set-diagnostic"] = function(buffer, err, sql, sql_start)
   if err.position then
-    return vim.diagnostic.set(diagnostics_ns, buffer, {diagnostic(err, sql, start)})
+    return vim.diagnostic.set(diagnostics_ns, buffer, {diagnostic(err, sql, sql_start)})
   else
     return nil
   end

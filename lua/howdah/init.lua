@@ -96,23 +96,19 @@ end
 howdah.query = function(sql)
   return rpc("query", sql)
 end
-local function show_outcome(buffer, outcome, sql, start)
-  if ((_G.type(outcome) == "table") and (nil ~= outcome.ok)) then
-    local result = outcome.ok
-    return render.show(result)
-  elseif ((_G.type(outcome) == "table") and (nil ~= outcome.err)) then
-    local err = outcome.err
-    render.display(errors.format(err, sql, start))
-    return errors["set-diagnostic"](buffer, err, sql, start)
+local function run_sql(sql, sql_start)
+  local buffer = vim.api.nvim_get_current_buf()
+  local results = howdah.query(sql)
+  local total = #results
+  local result = results[total]
+  errors["clear-diagnostic"](buffer)
+  render.show(result, {index = total, total = total}, sql, sql_start)
+  if ((_G.type(result) == "table") and (nil ~= result.err)) then
+    local err = result.err
+    return errors["set-diagnostic"](buffer, err, sql, sql_start)
   else
     return nil
   end
-end
-local function run_sql(sql, start)
-  local buffer = vim.api.nvim_get_current_buf()
-  local outcomes = howdah.query(sql)
-  errors["clear-diagnostic"](buffer)
-  return show_outcome(buffer, outcomes[#outcomes], sql, start)
 end
 howdah.run = function()
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
