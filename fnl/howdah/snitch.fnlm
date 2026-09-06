@@ -1,0 +1,96 @@
+;; Debugging aid in the spirit of Clojure's snitch: fn* is fn, plus the
+;; function records its parameters and every let/local/var/set binding in its
+;; body as they happen: into _G.snitch, and as bare globals so that `err`
+;; evaluates directly in the REPL. Swap fn -> fn* on the function under
+;; suspicion, save, run the code or its test, then evaluate the names. Each
+;; call starts _G.snitch from an empty table; the bare globals linger until
+;; overwritten. Not wired into case/match/each/for patterns.
+
+(fn skip? [name]
+  (or (= name "&") (= name "&as") (= name "...") (= (name:sub 1 1) "_")))
+
+(fn pattern-syms [pattern out]
+  "The symbols a binding pattern binds: a bare symbol, a destructuring table
+  or a multi-value list, searched recursively."
+  (let [out (or out [])]
+    (if (sym? pattern)
+        (when (not (skip? (tostring pattern)))
+          (table.insert out pattern))
+        (varg? pattern)
+        nil
+        (= (type pattern) :table)
+        (each [_ v (pairs pattern)]
+          (pattern-syms v out)))
+    out))
+
+(fn let-syms [bindings]
+  "The symbols bound by a let binding vector (patterns sit at odd positions)."
+  (let [out []]
+    (for [i 1 (length bindings) 2]
+      (pattern-syms (. bindings i) out))
+    out))
+
+(fn record [form syms]
+  "Appends to form a statement per symbol recording its current value under
+  its name, both in the _G.snitch snapshot and as a bare global so the name
+  evaluates directly in the REPL."
+  (each [_ s (ipairs syms)]
+    (table.insert form `(tset _G.snitch ,(tostring s) ,s))
+    (table.insert form `(tset _G ,(tostring s) ,s)))
+  form)
+
+(fn capture [syms]
+  "A statement recording each symbol's current value, or nil when there is
+  nothing to record."
+  (when (> (length syms) 0)
+    (record (list (sym :do)) syms)))
+
+(fn plain-sym? [x]
+  (and (sym? x) (not (: (tostring x) :find "%." 1 true))))
+
+(fn binding-form-syms [form]
+  "For a (local pat v), (var pat v) or (set sym v) form, the symbols it binds."
+  (case (and (list? form) (sym? (. form 1)) (tostring (. form 1)))
+    (where (or :local :var)) (pattern-syms (. form 2))
+    :set (if (plain-sym? (. form 2)) [(. form 2)] [])
+    _ []))
+
+(fn walk [form]
+  "Rewrites form in place: a capture statement follows every local/var/set,
+  and opens the body of every let."
+  (when (= (type form) :table)
+    (if (list? form)
+        (do
+          (var i 1)
+          (while (<= i (length form))
+            (let [child (. form i)]
+              (walk child)
+              (case (capture (binding-form-syms child))
+                statement (do
+                            (table.insert form (+ i 1) statement)
+                            (set i (+ i 1)))))
+            (set i (+ i 1)))
+          (when (and (sym? (. form 1)) (= (tostring (. form 1)) :let))
+            (case (capture (let-syms (. form 2)))
+              statement (table.insert form 3 statement))))
+        (or (sym? form) (varg? form))
+        nil
+        (each [_ v (pairs form)]
+          (walk v)))))
+
+(fn fn* [...]
+  (let [form (list (sym :fn) ...)
+        args-i (if (sequence? (. form 2)) 2 3)
+        after-args (. form (+ args-i 1))
+        ;; A string right after the args is a docstring only when a body
+        ;; follows it; otherwise it is the return value.
+        body-i (if (and (= (type after-args) :string) (. form (+ args-i 2)))
+                   (+ args-i 2)
+                   (+ args-i 1))
+        entry (record (list (sym :do) `(tset _G :snitch {}))
+                      (pattern-syms (. form args-i)))]
+    (walk form)
+    (table.insert form body-i entry)
+    form))
+
+{: fn*}

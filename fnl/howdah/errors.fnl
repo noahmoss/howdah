@@ -1,3 +1,4 @@
+(import-macros {: fn*} :howdah.snitch)
 (local errors {})
 
 (fn locate [text position]
@@ -54,7 +55,7 @@
       [(labelled :QUERY err.internal_query)]
       []))
 
-(fn errors.format [err sql start]
+(fn* errors.format [err sql start]
   "Formats a SQL error as lines for the results buffer. start is the zero-based
   row and byte column where sql begins in the query buffer."
   (-> (vim.iter [(headline err)

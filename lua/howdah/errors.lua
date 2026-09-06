@@ -63,6 +63,15 @@ local function internal_query_lines(err)
   end
 end
 errors.format = function(err, sql, start)
+  do
+    _G["snitch"] = {}
+    _G.snitch["err"] = err
+    _G["err"] = err
+    _G.snitch["sql"] = sql
+    _G["sql"] = sql
+    _G.snitch["start"] = start
+    _G["start"] = start
+  end
   return vim.iter({headline(err), detail_lines(err), buffer_query_lines(err, sql, start), internal_query_lines(err)}):flatten():totable()
 end
 local diagnostics_ns = vim.api.nvim_create_namespace("howdah")
