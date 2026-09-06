@@ -44,4 +44,16 @@
     (expect.equality (render.status "1 row" {:index 2 :total 3})
                      "1 row · statement 2 of 3")))
 
+(tset T.format-table "keeps headers for an empty result set"
+  (fn []
+    (expect.equality (render.format-table {:cols [:id] :rows [] :row_count 0})
+                     ["id" "--"])))
+
+(tset T.format-table "pads cells by display width rather than byte length"
+  (fn []
+    (expect.equality (render.format-table {:cols [:a :b]
+                                          :rows [["界" "é"] ["x" "y"]]
+                                          :row_count 2})
+                     ["a  | b" "---+--" "界 | é" "x  | y"])))
+
 T

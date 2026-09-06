@@ -77,9 +77,10 @@ fn push_some<T: Into<Value>>(fields: &mut Vec<(Value, Value)>, key: &str, value:
 
 #[cfg(test)]
 mod tests {
+    use howdah_core::{QueryResult, SqlError};
     use nvim_rs::Value;
 
-    use super::decode_args;
+    use super::{decode_args, statement_result_to_msgpack};
 
     #[test]
     fn decodes_one_string_argument() {
@@ -110,6 +111,93 @@ mod tests {
                     .unwrap()
                     .starts_with("invalid arguments for method \"connect\": ")
             );
+        }
+    }
+    #[test]
+    fn preserves_result_columns_rows_and_count() {
+        let result = QueryResult {
+            cols: Some(vec!["name".into()]),
+            rows: vec![vec!["café".into()]],
+            row_count: 1,
+        };
+        assert_eq!(
+            statement_result_to_msgpack(Ok(result)),
+            Value::Map(vec![(
+                Value::from("ok"),
+                Value::Map(vec![
+                    (
+                        Value::from("rows"),
+                        Value::Array(vec![Value::Array(vec![Value::from("café")])])
+                    ),
+                    (Value::from("row_count"), Value::from(1)),
+                    (Value::from("cols"), Value::Array(vec![Value::from("name")])),
+                ])
+            )])
+        );
+    }
+
+    #[test]
+    fn distinguishes_empty_result_sets_from_commands() {
+        for cols in [None, Some(vec!["id".into()])] {
+            let count = if cols.is_some() { 0 } else { 2 };
+            let result = QueryResult {
+                cols: cols.clone(),
+                rows: vec![],
+                row_count: count,
+            };
+            let value = statement_result_to_msgpack(Ok(result));
+            let payload = &value.as_map().unwrap()[0].1;
+            let fields = payload.as_map().unwrap();
+            let columns = fields.iter().find(|(key, _)| key.as_str() == Some("cols"));
+            assert_eq!(columns.is_some(), cols.is_some());
+            assert!(fields.contains(&(Value::from("rows"), Value::Array(vec![]))));
+            assert!(fields.contains(&(Value::from("row_count"), Value::from(count))));
+            assert!(fields.iter().all(|(_, value)| !value.is_nil()));
+        }
+    }
+
+    #[test]
+    fn preserves_error_fields_and_omits_missing_fields() {
+        for with_context in [false, true] {
+            let error = SqlError {
+                severity: "ERROR".into(),
+                code: "42601".into(),
+                message: "bad syntax".into(),
+                detail: with_context.then(|| "first\nsecond".into()),
+                hint: with_context.then(|| "try again".into()),
+                context: with_context.then(|| "function f".into()),
+                position: (!with_context).then_some(12),
+                internal_position: with_context.then_some(5),
+                internal_query: with_context.then(|| "select x".into()),
+            };
+            let value = statement_result_to_msgpack(Err(error));
+            let envelope = value.as_map().unwrap();
+            assert_eq!(envelope.len(), 1);
+            assert_eq!(envelope[0].0.as_str(), Some("err"));
+            let fields: std::collections::BTreeMap<_, _> = envelope[0]
+                .1
+                .as_map()
+                .unwrap()
+                .iter()
+                .map(|(key, value)| (key.as_str().unwrap(), value.clone()))
+                .collect();
+            let mut expected = std::collections::BTreeMap::from([
+                ("severity", Value::from("ERROR")),
+                ("code", Value::from("42601")),
+                ("message", Value::from("bad syntax")),
+            ]);
+            if with_context {
+                expected.extend([
+                    ("detail", Value::from("first\nsecond")),
+                    ("hint", Value::from("try again")),
+                    ("context", Value::from("function f")),
+                    ("internal_position", Value::from(5)),
+                    ("internal_query", Value::from("select x")),
+                ]);
+            } else {
+                expected.insert("position", Value::from(12));
+            }
+            assert_eq!(fields, expected);
         }
     }
 }
