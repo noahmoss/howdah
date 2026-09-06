@@ -1,4 +1,3 @@
-(import-macros {: fn*} :howdah.snitch)
 (local errors {})
 
 (fn locate [text position]
@@ -55,7 +54,7 @@
       [(labelled :QUERY err.internal_query)]
       []))
 
-(fn* errors.format [err sql start]
+(fn errors.format [err sql start]
   "Formats a SQL error as lines for the results buffer. start is the zero-based
   row and byte column where sql begins in the query buffer."
   (-> (vim.iter [(headline err)
@@ -63,7 +62,10 @@
                  (buffer-query-lines err sql start)
                  (internal-query-lines err)])
       (: :flatten)
-      (: :totable)))
+      ;; Ensure the error is properly split on newlines, since
+      ;; nvim_buf_set_lines rejects newlines
+      (: :join "\n")
+      (vim.split "\n")))
 
 ;; Create a namespace so that we can clear only Howdah-related diagnostics
 (local diagnostics-ns (vim.api.nvim_create_namespace :howdah))
