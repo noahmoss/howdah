@@ -113,7 +113,7 @@ local function run_sql(sql, start)
 end
 howdah.run = function()
   local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-  return run_sql(table.concat(lines, "\n"), {0, 0})
+  return run_sql(table.concat(lines, "\n"), {row = 0, ["byte-col"] = 0})
 end
 howdah["run-selection"] = function()
   local start = vim.fn.getpos("v")
@@ -126,7 +126,7 @@ howdah["run-selection"] = function()
   local _ = _let_13_[1]
   local line = _let_13_[2]
   local col = _let_13_[3]
-  return run_sql(table.concat(lines, "\n"), {(line - 1), (col - 1)})
+  return run_sql(table.concat(lines, "\n"), {row = (line - 1), ["byte-col"] = (col - 1)})
 end
 --[[ (howdah.start) (howdah.connect "host=localhost user=noahmoss dbname=howdah_dev") (render.show (howdah.query "select 1")) ]]
 return howdah

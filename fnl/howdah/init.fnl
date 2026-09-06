@@ -83,9 +83,8 @@
   (rpc :query sql))
 
 (fn run-sql [sql start]
-  "Runs sql and renders the outcome. start is how much of the current buffer
-  precedes sql, as [rows bytes], used to map error positions back onto the
-  buffer."
+  "Runs sql and renders the outcome. start is the zero-based row and byte
+  column where sql begins in the current buffer."
   (let [buffer (vim.api.nvim_get_current_buf)]
     (errors.clear-diagnostic buffer)
     (case (howdah.query sql)
@@ -96,7 +95,7 @@
 
 (fn howdah.run []
   (let [lines (vim.api.nvim_buf_get_lines 0 0 -1 false)]
-    (run-sql (table.concat lines "\n") [0 0])))
+    (run-sql (table.concat lines "\n") {:row 0 :byte-col 0})))
 
 (fn howdah.run-selection []
   (let [start (vim.fn.getpos :v)
@@ -107,7 +106,7 @@
         [[[_ line col]]] (vim.fn.getregionpos start end opts)]
     ;; The selection starts at (line, col), so line-1 rows and col-1 bytes
     ;; of the buffer precede it
-    (run-sql (table.concat lines "\n") [(- line 1) (- col 1)])))
+    (run-sql (table.concat lines "\n") {:row (- line 1) :byte-col (- col 1)})))
 
 (comment (howdah.start)
   (howdah.connect "host=localhost user=noahmoss dbname=howdah_dev")

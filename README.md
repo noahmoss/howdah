@@ -10,7 +10,7 @@ Status: early development, pre-alpha.
 ## Prerequisites
 
 - Rust toolchain (`cargo`)
-- Neovim (0.10+)
+- Neovim (0.11+)
 - A reachable PostgreSQL instance
 
 ## Install (development)
