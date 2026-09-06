@@ -3,7 +3,7 @@
 *The best seat on the elephant.*
 
 A Neovim plugin for querying, understanding, and administering a PostgreSQL
-instance without leaving your editor. 
+instance without leaving your editor.
 
 Status: early development, pre-alpha.
 
@@ -16,11 +16,10 @@ Status: early development, pre-alpha.
 ## Install (development)
 
 ```
-git clone <repo-url> ~/Projects/howdah
+git clone https://github.com/noahmoss/Howdah.git ~/Projects/howdah
 ```
 
-With [lazy.nvim](https://github.com/folke/lazy.nvim), add a spec pointing at the
-checkout. The `build` step compiles the backend binary on install and update:
+Add the checkout to [lazy.nvim](https://github.com/folke/lazy.nvim):
 
 ```lua
 {
@@ -29,36 +28,32 @@ checkout. The `build` step compiles the backend binary on install and update:
 }
 ```
 
-lazy adds the repo to `runtimepath` and runs the build for you. To build by hand:
-
-```
-cargo build
-```
-
 ## Usage
 
-In Neovim:
+Open a SQL buffer and connect to a database:
 
+```vim
+:Howdah open host=localhost dbname=mydb user=myuser
 ```
-:lua require("howdah").connect()   -- launch the backend, open the RPC channel
-:lua =require("howdah").ping()     -- health check, returns "pong"
-:lua require("howdah").run()       -- run the current buffer as SQL, render results
-```
+
+Or use `:Howdah` to connect using `DATABASE_URL`, falling back to `PGHOST`,
+`PGPORT`, `PGUSER`, `PGDATABASE`, and `PGPASSWORD`.
+
+In a buffer opened by Howdah:
+
+- `<localleader>eb` runs the whole buffer.
+- `<localleader>E` in visual mode runs the selection.
+
+Results and SQL errors appear in a split.
 
 ## Development
 
-The frontend is written in Fennel and compiled to Lua by
-[nfnl](https://github.com/Olical/nfnl). Editing `fnl/howdah/init.fnl` and saving
-auto-writes `lua/howdah/init.lua` — commit both.
+[nfnl](https://github.com/Olical/nfnl) compiles Fennel on save once you trust
+`.nfnl.fnl`. Source lives in `fnl/howdah/`, compiled Lua in `lua/howdah/`.
+Tests compile in place in `tests/`. Commit both Fennel and Lua.
 
-Because `require` caches modules, reload after a Fennel edit to pick it up in a
-running session:
+Tests, from the repository:
 
-```
-:lua package.loaded.howdah = nil
-:lua require("howdah")
-```
-
-The Rust backend is a separate process. Rebuild and relaunch it (`cargo build`,
-then `connect` again) to pick up Rust changes; Fennel edits never touch the
-running server.
+- Rust: `cargo test --workspace`
+- Fennel: `:lua MiniTest.run()` with [mini.test](https://github.com/nvim-mini/mini.test)
+  set up and Howdah on your runtimepath.
