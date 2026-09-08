@@ -54,6 +54,26 @@ Tests compile in place in `tests/`. Commit both Fennel and Lua.
 
 Tests, from the repository:
 
-- Rust: `cargo test --workspace`
+- Rust: `make test` (or `cargo test --workspace`)
 - Fennel: `:lua MiniTest.run()` with [mini.test](https://github.com/nvim-mini/mini.test)
   set up and Howdah on your runtimepath.
+
+### PostgreSQL integration tests
+
+Database tests are ignored by default. With Docker and Docker Compose installed
+and the Docker daemon running, run them from the repository:
+
+```sh
+make test-integration
+```
+
+This starts PostgreSQL 18 on `127.0.0.1:55432`, waits for it to be ready, runs the
+database tests, then removes the container and its data, including when tests fail.
+Each test uses its own connection and temporary tables.
+
+To use an existing test database instead:
+
+```sh
+HOWDAH_TEST_DATABASE_URL='your connection string' \
+  cargo test --workspace -- --ignored
+```
