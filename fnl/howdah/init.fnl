@@ -86,9 +86,9 @@
   "Runs sql, one result per statement, and renders the last. sql-start is the
   zero-based row and byte column where sql begins in the current buffer."
   (let [buffer (vim.api.nvim_get_current_buf)
-        results (howdah.query sql)
-        total (length results)
-        result (. results total)]
+        {: statements} (howdah.query sql)
+        total (length statements)
+        result (. statements total)]
     (errors.clear-diagnostic buffer)
     (render.show result {:index total : total} sql sql-start)
     (case result

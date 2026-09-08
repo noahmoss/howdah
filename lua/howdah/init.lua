@@ -98,9 +98,10 @@ howdah.query = function(sql)
 end
 local function run_sql(sql, sql_start)
   local buffer = vim.api.nvim_get_current_buf()
-  local results = howdah.query(sql)
-  local total = #results
-  local result = results[total]
+  local _let_9_ = howdah.query(sql)
+  local statements = _let_9_.statements
+  local total = #statements
+  local result = statements[total]
   errors["clear-diagnostic"](buffer)
   render.show(result, {index = total, total = total}, sql, sql_start)
   if ((_G.type(result) == "table") and (nil ~= result.err)) then
@@ -119,12 +120,12 @@ howdah["run-selection"] = function()
   local _end = vim.fn.getpos(".")
   local opts = {type = vim.fn.mode()}
   local lines = vim.fn.getregion(start, _end, opts)
-  local _let_10_ = vim.fn.getregionpos(start, _end, opts)
-  local _let_11_ = _let_10_[1]
+  local _let_11_ = vim.fn.getregionpos(start, _end, opts)
   local _let_12_ = _let_11_[1]
-  local _ = _let_12_[1]
-  local line = _let_12_[2]
-  local col = _let_12_[3]
+  local _let_13_ = _let_12_[1]
+  local _ = _let_13_[1]
+  local line = _let_13_[2]
+  local col = _let_13_[3]
   return run_sql(table.concat(lines, "\n"), {row = (line - 1), ["byte-col"] = (col - 1)})
 end
 --[[ (howdah.start) (howdah.connect "host=localhost user=noahmoss dbname=howdah_dev") (howdah.query "select 1; select 2") ]]
