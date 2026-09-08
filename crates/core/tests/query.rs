@@ -1,5 +1,7 @@
 mod common;
 
+use std::time::Duration;
+
 use howdah_core::run_query;
 
 #[tokio::test]
@@ -8,7 +10,8 @@ async fn preserves_commands_without_row_counts() {
     let client = common::connect().await;
     let results = run_query(&client, "CREATE TEMP TABLE command_tags (id INT)")
         .await
-        .unwrap();
+        .unwrap()
+        .statements;
 
     assert_eq!(results.len(), 1);
     let result = results[0].as_ref().unwrap();
@@ -28,7 +31,8 @@ async fn preserves_zero_rows_affected() {
         .unwrap();
     let results = run_query(&client, "UPDATE command_tags SET id = 3")
         .await
-        .unwrap();
+        .unwrap()
+        .statements;
 
     assert_eq!(results.len(), 1);
     let result = results[0].as_ref().unwrap();
@@ -51,7 +55,8 @@ async fn preserves_nonzero_rows_affected() {
         .unwrap();
     let results = run_query(&client, "DELETE FROM command_tags")
         .await
-        .unwrap();
+        .unwrap()
+        .statements;
 
     assert_eq!(results.len(), 1);
     let result = results[0].as_ref().unwrap();
@@ -74,7 +79,8 @@ async fn preserves_insert_tag_with_returning_rows() {
         "INSERT INTO command_tags VALUES (1), (2) RETURNING id",
     )
     .await
-    .unwrap();
+    .unwrap()
+    .statements;
 
     assert_eq!(results.len(), 1);
     let result = results[0].as_ref().unwrap();
@@ -90,7 +96,8 @@ async fn preserves_columns_for_empty_result_sets() {
     let client = common::connect().await;
     let results = run_query(&client, "SELECT 1 AS id WHERE false")
         .await
-        .unwrap();
+        .unwrap()
+        .statements;
 
     assert_eq!(results.len(), 1);
     let result = results[0].as_ref().unwrap();
@@ -111,7 +118,8 @@ async fn keeps_statement_results_separate() {
          CREATE TEMP TABLE command_tags (id INT);",
     )
     .await
-    .unwrap();
+    .unwrap()
+    .statements;
 
     assert_eq!(results.len(), 3);
     let first = results[0].as_ref().unwrap();
@@ -138,7 +146,8 @@ async fn keeps_statement_results_separate() {
 async fn skips_queries_without_statements() {
     let client = common::connect().await;
     for sql in ["", "  ", "-- comment", "/* comment */", "; ;"] {
-        assert!(run_query(&client, sql).await.unwrap().is_empty(), "{sql:?}");
+        let run = run_query(&client, sql).await.unwrap();
+        assert!(run.statements.is_empty(), "{sql:?}");
     }
 }
 
@@ -148,7 +157,8 @@ async fn skips_empty_statements_around_a_query() {
     let client = common::connect().await;
     let results = run_query(&client, "; SELECT 1 WHERE false; ; -- comment")
         .await
-        .unwrap();
+        .unwrap()
+        .statements;
 
     assert_eq!(results.len(), 1);
     let result = results[0].as_ref().unwrap();
@@ -156,4 +166,38 @@ async fn skips_empty_statements_around_a_query() {
     assert_eq!(result.row_count, Some(0));
     assert!(result.cols.is_some());
     assert!(result.rows.is_empty());
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL; set HOWDAH_TEST_DATABASE_URL and run with --ignored"]
+async fn times_the_whole_run() {
+    let client = common::connect().await;
+    let run = run_query(&client, "SELECT 1; SELECT pg_sleep(0.05); SELECT 2")
+        .await
+        .unwrap();
+
+    assert_eq!(run.statements.len(), 3);
+    // A loaded machine only makes the timing larger, so a lower bound is safe.
+    assert!(
+        run.elapsed >= Duration::from_millis(50),
+        "{:?}",
+        run.elapsed
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL; set HOWDAH_TEST_DATABASE_URL and run with --ignored"]
+async fn times_runs_that_end_in_an_error() {
+    let client = common::connect().await;
+    let run = run_query(&client, "SELECT pg_sleep(0.05); SELECT 1/0")
+        .await
+        .unwrap();
+
+    assert_eq!(run.statements.len(), 2);
+    assert!(run.statements[1].is_err());
+    assert!(
+        run.elapsed >= Duration::from_millis(50),
+        "{:?}",
+        run.elapsed
+    );
 }

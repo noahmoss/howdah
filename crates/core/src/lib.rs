@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use futures_util::StreamExt;
 use tokio_postgres::{
     Client, SimpleColumn, SimpleQueryMessage, SimpleQueryRow,
@@ -5,7 +7,7 @@ use tokio_postgres::{
 };
 
 #[derive(Debug, Default)]
-pub struct QueryResult {
+pub struct StatementResult {
     /// None when the statement returns no result set (e.g. DDL).
     pub cols: Option<Vec<String>>,
     pub rows: Vec<Vec<String>>,
@@ -15,7 +17,14 @@ pub struct QueryResult {
     pub tag: String,
 }
 
-pub type StatementResult = Result<QueryResult, SqlError>;
+/// Everything one `run_query` call produced.
+#[derive(Debug)]
+pub struct QueryRun {
+    /// One entry per statement that ran, in execution order.
+    pub statements: Vec<Result<StatementResult, SqlError>>,
+    /// Time for the whole run, measured client-side.
+    pub elapsed: Duration,
+}
 
 #[derive(Debug)]
 pub struct SqlError {
@@ -53,22 +62,20 @@ impl From<&DbError> for SqlError {
     }
 }
 
-pub async fn run_query(
-    client: &Client,
-    sql: &str,
-) -> Result<Vec<StatementResult>, tokio_postgres::Error> {
+pub async fn run_query(client: &Client, sql: &str) -> Result<QueryRun, tokio_postgres::Error> {
+    let started = Instant::now();
     let stream = client.simple_query_raw(sql).await?;
     tokio::pin!(stream);
 
-    let mut results = Vec::new();
-    let mut current = QueryResult::default();
+    let mut statements = Vec::new();
+    let mut current = StatementResult::default();
 
     while let Some(msg) = stream.next().await {
         let msg = match msg {
             Ok(msg) => msg,
             Err(err) => match err.as_db_error() {
                 Some(db_error) => {
-                    results.push(Err(db_error.into()));
+                    statements.push(Err(db_error.into()));
                     break;
                 }
                 None => return Err(err),
@@ -80,8 +87,8 @@ pub async fn run_query(
             SimpleQueryMessage::CommandComplete(command) => {
                 current.row_count = command.rows_affected();
                 current.tag = command.tag().to_owned();
-                results.push(Ok(current));
-                current = QueryResult::default();
+                statements.push(Ok(current));
+                current = StatementResult::default();
             }
             // No statement ran, so there is no result to collect.
             SimpleQueryMessage::EmptyQueryResponse => {}
@@ -89,7 +96,10 @@ pub async fn run_query(
         }
     }
 
-    Ok(results)
+    Ok(QueryRun {
+        statements,
+        elapsed: started.elapsed(),
+    })
 }
 
 fn column_names(desc: &[SimpleColumn]) -> Vec<String> {

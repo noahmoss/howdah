@@ -9,7 +9,7 @@ use nvim_rs::{Handler, Neovim, Value, compat::tokio::Compat};
 use tokio::fs::File;
 use tokio_postgres::{Client, Config, NoTls};
 
-use crate::protocol::{decode_args, statement_result_to_msgpack};
+use crate::protocol::{decode_args, query_run_to_msgpack};
 
 #[derive(Clone, Debug)]
 pub struct NeovimHandler {
@@ -83,16 +83,11 @@ impl NeovimHandler {
         };
 
         // Only server failures use the RPC error channel; SQL errors are data.
-        let results = run_query(&client, sql)
+        let run = run_query(&client, sql)
             .await
             .map_err(|err| Value::from(format!("execution error: {}", error_chain(&err))))?;
 
-        Ok(Value::Array(
-            results
-                .into_iter()
-                .map(statement_result_to_msgpack)
-                .collect(),
-        ))
+        Ok(query_run_to_msgpack(run))
     }
 }
 
