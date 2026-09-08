@@ -77,15 +77,18 @@ local function plural(n, word)
   end
   return (n .. " " .. word .. _7_)
 end
+local command_verbs = {INSERT = "inserted", UPDATE = "updated", DELETE = "deleted"}
 render.summary = function(_9_)
-  local cols = _9_.cols
+  local tag = _9_.tag
   local row_count = _9_.row_count
-  if cols then
+  local command = string.match(tag, "^(%S+)")
+  local verb = command_verbs[command]
+  if (row_count and (command == "SELECT")) then
     return plural(row_count, "row")
-  elseif (row_count == 0) then
-    return "done"
+  elseif (row_count and verb) then
+    return (plural(row_count, "row") .. " " .. verb)
   else
-    return (plural(row_count, "row") .. " affected")
+    return tag
   end
 end
 render.status = function(summary, _11_)

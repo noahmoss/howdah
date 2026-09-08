@@ -36,11 +36,15 @@
 (fn plural [n word]
   (.. n " " word (if (= n 1) "" "s")))
 
-(fn render.summary [{: cols : row_count}]
-  "Reports the row count for a result set, or the number of rows affected."
-  (if cols (plural row_count "row")
-      (= row_count 0) "done"
-      (.. (plural row_count "row") " affected")))
+(local command-verbs {:INSERT :inserted :UPDATE :updated :DELETE :deleted})
+
+(fn render.summary [{: tag : row_count}]
+  "Formats common command tags, falling back to the original tag."
+  (let [command (string.match tag "^(%S+)")
+        verb (. command-verbs command)]
+    (if (and row_count (= command :SELECT)) (plural row_count "row")
+        (and row_count verb) (.. (plural row_count "row") " " verb)
+        tag)))
 
 (fn render.status [summary {: index : total}]
   "The results window's status: the summary, placed in its run when the run

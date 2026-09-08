@@ -19,19 +19,32 @@
 
 (tset T.summary "counts the rows of a result set"
   (fn []
-    (expect.equality (render.summary {:cols [:a] :rows [[:1]] :row_count 1})
+    (expect.equality (render.summary {:tag "SELECT 1" :row_count 1})
                      "1 row")
-    (expect.equality (render.summary {:cols [:a] :rows [] :row_count 0})
+    (expect.equality (render.summary {:tag "SELECT 0" :row_count 0})
                      "0 rows")))
 
-(tset T.summary "reports rows affected when there is no result set"
+(tset T.summary "names the operation and handles singular and zero counts"
   (fn []
-    (expect.equality (render.summary {:rows [] :row_count 2})
-                     "2 rows affected")))
+    (expect.equality (render.summary {:tag "INSERT 0 2" :row_count 2})
+                     "2 rows inserted")
+    (expect.equality (render.summary {:tag "UPDATE 0" :row_count 0})
+                     "0 rows updated")
+    (expect.equality (render.summary {:tag "DELETE 1" :row_count 1})
+                     "1 row deleted")))
 
-(tset T.summary "reads as done when nothing was returned or affected"
+(tset T.summary "preserves tags without counts and unrecognized commands"
   (fn []
-    (expect.equality (render.summary {:rows [] :row_count 0}) "done")))
+    (expect.equality (render.summary {:tag "CREATE TABLE"}) "CREATE TABLE")
+    (expect.equality (render.summary {:tag "BEGIN"}) "BEGIN")
+    (expect.equality (render.summary {:tag "COPY 2" :row_count 2}) "COPY 2")
+    (expect.equality (render.summary {:tag "SELECT"}) "SELECT")))
+
+(tset T.summary "keeps the operation for DML with returning rows"
+  (fn []
+    (expect.equality (render.summary {:tag "INSERT 0 1" :row_count 1
+                                      :cols [:id] :rows [[:1]]})
+                     "1 row inserted")))
 
 (set T.status (MiniTest.new_set))
 

@@ -17,18 +17,21 @@ pub(crate) fn statement_result_to_msgpack(result: StatementResult) -> Value {
 
 /// Returns a msgpack value representing the query results, with `cols`
 /// formatted as an array of strings (omitted when there is no result set),
-/// `rows` as an array of arrays of strings, and `row_count` as an integer.
+/// `rows` as an array of arrays of strings, the command `tag`, and an optional
+/// integer `row_count`.
 fn query_result_to_msgpack(result: QueryResult) -> Value {
     let QueryResult {
         rows,
         cols,
         row_count,
+        tag,
     } = result;
     let row_values = Value::Array(rows.into_iter().map(string_array).collect());
     let mut fields = vec![
         (Value::from("rows"), row_values),
-        (Value::from("row_count"), Value::from(row_count)),
+        (Value::from("tag"), Value::from(tag)),
     ];
+    push_some(&mut fields, "row_count", row_count);
     push_some(&mut fields, "cols", cols.map(string_array));
     Value::Map(fields)
 }
@@ -118,7 +121,8 @@ mod tests {
         let result = QueryResult {
             cols: Some(vec!["name".into()]),
             rows: vec![vec!["café".into()]],
-            row_count: 1,
+            row_count: Some(1),
+            tag: "SELECT 1".into(),
         };
         assert_eq!(
             statement_result_to_msgpack(Ok(result)),
@@ -129,6 +133,7 @@ mod tests {
                         Value::from("rows"),
                         Value::Array(vec![Value::Array(vec![Value::from("café")])])
                     ),
+                    (Value::from("tag"), Value::from("SELECT 1")),
                     (Value::from("row_count"), Value::from(1)),
                     (Value::from("cols"), Value::Array(vec![Value::from("name")])),
                 ])
@@ -138,12 +143,15 @@ mod tests {
 
     #[test]
     fn distinguishes_empty_result_sets_from_commands() {
-        for cols in [None, Some(vec!["id".into()])] {
-            let count = if cols.is_some() { 0 } else { 2 };
+        for (cols, tag, count) in [
+            (None, "UPDATE 2", 2),
+            (Some(vec!["id".into()]), "SELECT 0", 0),
+        ] {
             let result = QueryResult {
                 cols: cols.clone(),
                 rows: vec![],
-                row_count: count,
+                row_count: Some(count),
+                tag: tag.into(),
             };
             let value = statement_result_to_msgpack(Ok(result));
             let payload = &value.as_map().unwrap()[0].1;
@@ -152,6 +160,25 @@ mod tests {
             assert_eq!(columns.is_some(), cols.is_some());
             assert!(fields.contains(&(Value::from("rows"), Value::Array(vec![]))));
             assert!(fields.contains(&(Value::from("row_count"), Value::from(count))));
+            assert!(fields.iter().all(|(_, value)| !value.is_nil()));
+        }
+    }
+
+    #[test]
+    fn omits_absent_counts_but_preserves_zero() {
+        for (tag, count) in [("CREATE TABLE", None), ("UPDATE 0", Some(0))] {
+            let result = QueryResult {
+                tag: tag.into(),
+                row_count: count,
+                ..QueryResult::default()
+            };
+            let value = statement_result_to_msgpack(Ok(result));
+            let fields = value.as_map().unwrap()[0].1.as_map().unwrap();
+            assert!(fields.contains(&(Value::from("tag"), Value::from(tag))));
+            let row_count = fields
+                .iter()
+                .find(|(key, _)| key.as_str() == Some("row_count"));
+            assert_eq!(row_count.map(|(_, value)| value.as_u64().unwrap()), count);
             assert!(fields.iter().all(|(_, value)| !value.is_nil()));
         }
     }

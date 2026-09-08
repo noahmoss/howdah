@@ -9,8 +9,10 @@ pub struct QueryResult {
     /// None when the statement returns no result set (e.g. DDL).
     pub cols: Option<Vec<String>>,
     pub rows: Vec<Vec<String>>,
-    /// Rows returned or affected, per CommandComplete.
-    pub row_count: u64,
+    /// Rows returned or affected. None when the command tag has no row count.
+    pub row_count: Option<u64>,
+    /// The full command tag returned by PostgreSQL, unchanged.
+    pub tag: String,
 }
 
 pub type StatementResult = Result<QueryResult, SqlError>;
@@ -75,11 +77,14 @@ pub async fn run_query(
         match msg {
             SimpleQueryMessage::RowDescription(desc) => current.cols = Some(column_names(&desc)),
             SimpleQueryMessage::Row(row) => current.rows.push(cells(&row)),
-            SimpleQueryMessage::CommandComplete(count) => {
-                current.row_count = count;
+            SimpleQueryMessage::CommandComplete(command) => {
+                current.row_count = command.rows_affected();
+                current.tag = command.tag().to_owned();
                 results.push(Ok(current));
                 current = QueryResult::default();
             }
+            // No statement ran, so there is no result to collect.
+            SimpleQueryMessage::EmptyQueryResponse => {}
             _ => {}
         }
     }
