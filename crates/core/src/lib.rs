@@ -6,6 +6,8 @@ use tokio_postgres::{
     error::{DbError, ErrorPosition},
 };
 
+mod scanner;
+
 #[derive(Debug, Default)]
 pub struct StatementResult {
     /// None when the statement returns no result set (e.g. DDL).
