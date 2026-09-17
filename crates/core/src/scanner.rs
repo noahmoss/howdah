@@ -47,14 +47,21 @@ impl ScanState {
         self.record_initial_keyword(identifier);
 
         if self.is_create_routine() {
-            if identifier.eq_ignore_ascii_case("begin") {
+            if self.opens_block(identifier) {
                 self.begin_depth += 1;
-            } else if identifier.eq_ignore_ascii_case("case") && self.begin_depth > 0 {
-                self.begin_depth += 1;
-            } else if identifier.eq_ignore_ascii_case("end") && self.begin_depth > 0 {
+            } else if self.closes_block(identifier) {
                 self.begin_depth -= 1;
             }
         }
+    }
+
+    fn opens_block(&self, identifier: &str) -> bool {
+        identifier.eq_ignore_ascii_case("begin")
+            || (identifier.eq_ignore_ascii_case("case") && self.begin_depth > 0)
+    }
+
+    fn closes_block(&self, identifier: &str) -> bool {
+        identifier.eq_ignore_ascii_case("end") && self.begin_depth > 0
     }
 
     fn record_initial_keyword(&mut self, identifier: &str) {
@@ -134,4 +141,186 @@ fn split_statements(sql: &str) -> Vec<&str> {
     }
 
     statements
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_statements;
+
+    #[test]
+    fn empty_input_has_no_statements() {
+        assert!(split_statements("").is_empty());
+    }
+
+    #[test]
+    fn splits_at_semicolons_and_keeps_unterminated_tail() {
+        assert_eq!(
+            split_statements("SELECT 1;SELECT 2;SELECT 3"),
+            ["SELECT 1;", "SELECT 2;", "SELECT 3"]
+        );
+        assert_eq!(split_statements("SELECT 1;"), ["SELECT 1;"]);
+        assert_eq!(split_statements("SELECT 1"), ["SELECT 1"]);
+    }
+
+    #[test]
+    fn preserves_whitespace_in_statement_slices() {
+        assert_eq!(
+            split_statements("  SELECT 1;\n\tSELECT 2;\n"),
+            ["  SELECT 1;", "\n\tSELECT 2;", "\n"]
+        );
+    }
+
+    #[test]
+    fn preserves_empty_statements() {
+        assert_eq!(split_statements(";SELECT 1;;"), [";", "SELECT 1;", ";"]);
+    }
+
+    #[test]
+    fn splits_after_multibyte_identifiers() {
+        assert_eq!(
+            split_statements("SELECT café;SELECT 日本語"),
+            ["SELECT café;", "SELECT 日本語"]
+        );
+    }
+
+    #[test]
+    fn waits_for_all_parentheses_to_close() {
+        // Deliberately invalid SQL: the scanner finds boundaries, not syntax errors.
+        assert_eq!(
+            split_statements("SELECT (1; (2; 3); 4);SELECT 5;"),
+            ["SELECT (1; (2; 3); 4);", "SELECT 5;"]
+        );
+        assert_eq!(
+            split_statements("SELECT (1;SELECT 2;"),
+            ["SELECT (1;SELECT 2;"]
+        );
+    }
+
+    #[test]
+    fn unmatched_closing_parenthesis_does_not_hide_boundaries() {
+        assert_eq!(
+            split_statements("SELECT 1);SELECT 2;"),
+            ["SELECT 1);", "SELECT 2;"]
+        );
+    }
+
+    #[test]
+    fn transaction_begin_does_not_open_a_routine_body() {
+        assert_eq!(
+            split_statements("BEGIN;INSERT INTO t VALUES (1);COMMIT;"),
+            ["BEGIN;", "INSERT INTO t VALUES (1);", "COMMIT;"]
+        );
+    }
+
+    #[test]
+    fn keeps_empty_statements_inside_atomic_body() {
+        let routine = "CREATE FUNCTION f() RETURNS boolean\nBEGIN ATOMIC\n;;RETURN false;;\nEND;";
+        let sql = format!("{routine}SELECT 1;");
+        assert_eq!(split_statements(&sql), [routine, "SELECT 1;"]);
+    }
+
+    #[test]
+    fn keeps_multiple_statements_inside_atomic_body() {
+        let routine =
+            "CREATE FUNCTION f() RETURNS boolean\nBEGIN ATOMIC\nSELECT 1;\nSELECT false;\nEND;";
+        let sql = format!("{routine}SELECT 1;");
+        assert_eq!(split_statements(&sql), [routine, "SELECT 1;"]);
+    }
+
+    #[test]
+    fn case_end_does_not_close_atomic_body() {
+        let routine = "CREATE FUNCTION f(x int) RETURNS boolean LANGUAGE SQL
+BEGIN ATOMIC
+    SELECT CASE WHEN x % 2 = 0 THEN true ELSE false END;
+END;";
+        let sql = format!("{routine}SELECT 1;");
+        assert_eq!(split_statements(&sql), [routine, "SELECT 1;"]);
+    }
+
+    #[test]
+    fn recognizes_all_routine_prefixes_case_insensitively() {
+        for prefix in [
+            "CREATE FUNCTION",
+            "CREATE PROCEDURE",
+            "CREATE OR REPLACE FUNCTION",
+            "CREATE OR REPLACE PROCEDURE",
+            "cReAtE oR rEpLaCe fUnCtIoN",
+        ] {
+            let routine = format!("{prefix} f() LANGUAGE SQL bEgIn ATOMIC SELECT 1; eNd;");
+            let sql = format!("{routine}SELECT 2;");
+            assert_eq!(
+                split_statements(&sql),
+                [routine.as_str(), "SELECT 2;"],
+                "{prefix}"
+            );
+        }
+    }
+
+    #[test]
+    fn requires_routine_keywords_at_start_of_statement() {
+        for first in [
+            "SELECT CREATE FUNCTION f BEGIN;",
+            "CREATE TABLE f BEGIN;",
+            "CREATE OR FUNCTION f BEGIN;",
+            "CREATE REPLACE FUNCTION f BEGIN;",
+        ] {
+            let sql = format!("{first}SELECT 2;");
+            assert_eq!(split_statements(&sql), [first, "SELECT 2;"], "{first}");
+        }
+    }
+
+    #[test]
+    fn keyword_prefixes_in_identifiers_do_not_open_blocks() {
+        for identifier in ["beginning", "begin_", "begin1", "begin$tag", "beginé"] {
+            let first = format!("CREATE FUNCTION f() RETURNS int RETURN {identifier};");
+            let sql = format!("{first}SELECT 2;");
+            assert_eq!(
+                split_statements(&sql),
+                [first.as_str(), "SELECT 2;"],
+                "{identifier}"
+            );
+        }
+    }
+
+    #[test]
+    fn ignores_block_keywords_inside_parentheses() {
+        let routine =
+            "CREATE FUNCTION f(begin int) RETURNS int BEGIN ATOMIC SELECT (end); SELECT 2; END;";
+        let sql = format!("{routine}SELECT 3;");
+        assert_eq!(split_statements(&sql), [routine, "SELECT 3;"]);
+    }
+
+    #[test]
+    fn tracks_nested_case_expressions() {
+        let routine = "CREATE FUNCTION f() RETURNS int BEGIN ATOMIC
+SELECT CASE WHEN true THEN CASE WHEN false THEN 1 ELSE 2 END ELSE 3 END;
+SELECT 4;
+END;";
+        let sql = format!("{routine}SELECT 5;");
+        assert_eq!(split_statements(&sql), [routine, "SELECT 5;"]);
+    }
+
+    #[test]
+    fn case_outside_atomic_body_does_not_change_block_depth() {
+        let routine = "CREATE FUNCTION f() RETURNS int RETURN CASE WHEN true THEN 1 ELSE 2 END;";
+        let sql = format!("{routine}SELECT 3;");
+        assert_eq!(split_statements(&sql), [routine, "SELECT 3;"]);
+    }
+
+    #[test]
+    fn resets_routine_tracking_between_statements() {
+        let routine = "CREATE OR REPLACE FUNCTION f() RETURNS int BEGIN ATOMIC SELECT 1; END;";
+        let procedure = "CREATE PROCEDURE p() LANGUAGE SQL BEGIN ATOMIC SELECT 2; END;";
+        let sql = format!("{routine}BEGIN;SELECT 3;COMMIT;{procedure}");
+        assert_eq!(
+            split_statements(&sql),
+            [routine, "BEGIN;", "SELECT 3;", "COMMIT;", procedure]
+        );
+    }
+
+    #[test]
+    fn keeps_unfinished_routine_as_one_tail() {
+        let sql = "CREATE FUNCTION f() RETURNS int BEGIN ATOMIC SELECT 1; SELECT 2;";
+        assert_eq!(split_statements(sql), [sql]);
+    }
 }
