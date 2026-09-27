@@ -1,6 +1,8 @@
 // Rough port of parts of @postgres/postgres/blob/master/src/fe_utils/psqlscan.l
 // for splitting a SQL string on statement boundaries.
 
+use std::{iter::Peekable, str::CharIndices};
+
 // Identifier keywords that impact scanning behavior
 #[derive(Clone, Copy, Default)]
 enum Keyword {
@@ -102,6 +104,7 @@ fn split_statements(sql: &str) -> Vec<&str> {
 
     while let Some((i, c)) = chars.next() {
         match c {
+            '\'' => skip_quoted(&mut chars, '\''),
             '(' => {
                 state.paren_depth += 1;
             }
@@ -141,6 +144,21 @@ fn split_statements(sql: &str) -> Vec<&str> {
     }
 
     statements
+}
+
+// Consume the rest of a quoted token through its closing delimiter.
+// Unterminated input consumes to the end.
+fn skip_quoted(chars: &mut Peekable<CharIndices>, delimiter: char) {
+    while let Some((_, c)) = chars.next() {
+        if c != delimiter {
+            continue;
+        }
+        // A doubled delimiter is escaped (psql's `xqdouble` / `xddouble`)
+        let escaped = chars.next_if(|&(_, next)| next == delimiter).is_some();
+        if !escaped {
+            return;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -321,6 +339,58 @@ END;";
     #[test]
     fn keeps_unfinished_routine_as_one_tail() {
         let sql = "CREATE FUNCTION f() RETURNS int BEGIN ATOMIC SELECT 1; SELECT 2;";
+        assert_eq!(split_statements(sql), [sql]);
+    }
+
+    #[test]
+    fn ignores_semicolons_inside_single_quotes() {
+        assert_eq!(
+            split_statements("SELECT ';';SELECT 2;"),
+            ["SELECT ';';", "SELECT 2;"]
+        );
+    }
+
+    #[test]
+    fn doubled_single_quotes_do_not_close_string() {
+        for first in [
+            "SELECT 'it''s; fine';",
+            "SELECT '';",
+            "SELECT '''';",
+            "SELECT ''';''';",
+        ] {
+            let sql = format!("{first}SELECT 2;");
+            assert_eq!(split_statements(&sql), [first, "SELECT 2;"], "{first}");
+        }
+    }
+
+    #[test]
+    fn ignores_parentheses_inside_single_quotes() {
+        assert_eq!(
+            split_statements("SELECT '(';SELECT ')';SELECT 3;"),
+            ["SELECT '(';", "SELECT ')';", "SELECT 3;"]
+        );
+    }
+
+    #[test]
+    fn ignores_block_keywords_inside_single_quotes() {
+        let routine = "CREATE FUNCTION f() RETURNS text BEGIN ATOMIC SELECT 'end;'; END;";
+        let sql = format!("{routine}SELECT 'begin';SELECT 3;");
+        assert_eq!(
+            split_statements(&sql),
+            [routine, "SELECT 'begin';", "SELECT 3;"]
+        );
+    }
+
+    #[test]
+    fn prefixed_string_constants_are_quoted() {
+        let first = "SELECT x'1;', B'0;', n'a;', U&'d;';";
+        let sql = format!("{first}SELECT 2;");
+        assert_eq!(split_statements(&sql), [first, "SELECT 2;"]);
+    }
+
+    #[test]
+    fn keeps_unterminated_single_quote_as_one_tail() {
+        let sql = "SELECT 'abc; SELECT 2;";
         assert_eq!(split_statements(sql), [sql]);
     }
 }
