@@ -1,8 +1,6 @@
 //! Splits SQL into statements. A rough port of parts of psql's lexer,
 //! `src/fe_utils/psqlscan.l` in the PostgreSQL source.
 
-use std::{iter::Peekable, str::CharIndices};
-
 /// Keywords that identify a `CREATE [OR REPLACE] {FUNCTION | PROCEDURE}`
 /// statement.
 #[derive(Clone, Copy)]
@@ -236,71 +234,13 @@ impl TokenKind {
 /// of the input.
 struct Lexer<'a> {
     sql: &'a str,
-    chars: Peekable<CharIndices<'a>>,
+    /// Byte offset of the next token.
+    pos: usize,
 }
 
 impl<'a> Lexer<'a> {
     fn new(sql: &'a str) -> Self {
-        Self {
-            sql,
-            chars: sql.char_indices().peekable(),
-        }
-    }
-
-    /// Byte offset of the next unconsumed character.
-    fn offset(&mut self) -> usize {
-        self.chars.peek().map_or(self.sql.len(), |&(i, _)| i)
-    }
-
-    fn skip_while(&mut self, mut predicate: impl FnMut(char) -> bool) {
-        while self.chars.next_if(|&(_, c)| predicate(c)).is_some() {}
-    }
-
-    /// Advances to byte offset `end`.
-    fn skip_to(&mut self, end: usize) {
-        while self.chars.next_if(|&(i, _)| i < end).is_some() {}
-    }
-
-    /// Consumes the rest of a quoted token through its closing `delimiter`.
-    fn skip_quoted(&mut self, delimiter: char, backslash: Backslash) {
-        while let Some((_, c)) = self.chars.next() {
-            match c {
-                '\\' if backslash == Backslash::Escapes => {
-                    self.chars.next();
-                }
-                c if c == delimiter => {
-                    // A doubled delimiter is escaped
-                    let escaped = self.chars.next_if(|&(_, n)| n == delimiter).is_some();
-                    if !escaped {
-                        return;
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
-    /// Consumes the rest of a `/* */` comment, which can nest.
-    fn skip_block_comment(&mut self) {
-        let mut depth = 1;
-        while let Some((_, c)) = self.chars.next() {
-            let next = self.chars.peek().map(|&(_, n)| n);
-
-            match (c, next) {
-                ('/', Some('*')) => {
-                    self.chars.next();
-                    depth += 1;
-                }
-                ('*', Some('/')) => {
-                    self.chars.next();
-                    depth -= 1;
-                    if depth == 0 {
-                        return;
-                    }
-                }
-                _ => {}
-            }
-        }
+        Self { sql, pos: 0 }
     }
 }
 
@@ -308,62 +248,104 @@ impl<'a> Iterator for Lexer<'a> {
     type Item = Token<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let (start, c) = self.chars.next()?;
-        let next = self.chars.peek().map(|&(_, n)| n);
+        use Backslash::{Escapes, Literal};
 
-        let kind = match (c, next) {
-            ('\'', _) => {
-                self.skip_quoted('\'', Backslash::Literal);
-                TokenKind::String
-            }
-            ('"', _) => {
-                self.skip_quoted('"', Backslash::Literal);
-                TokenKind::QuotedIdentifier
-            }
+        let rest = &self.sql[self.pos..];
+        let mut chars = rest.chars();
+        let c = chars.next()?;
+        let next = chars.next();
+
+        // Lengths are in bytes; literal ones count ASCII characters.
+        let (kind, len) = match (c, next) {
+            ('\'', _) => (TokenKind::String, quoted_len(rest, '\'', Literal)),
+            ('"', _) => (TokenKind::QuotedIdentifier, quoted_len(rest, '"', Literal)),
             // Escape string
             ('e' | 'E', Some('\'')) => {
-                self.chars.next();
-                self.skip_quoted('\'', Backslash::Escapes);
-                TokenKind::String
+                (TokenKind::String, 1 + quoted_len(&rest[1..], '\'', Escapes))
             }
-            ('$', _) => match dollar_quote_len(&self.sql[start..]) {
-                Some(len) => {
-                    self.skip_to(start + len);
-                    TokenKind::String
-                }
+            ('$', _) => match dollar_quote_len(rest) {
+                Some(len) => (TokenKind::String, len),
                 // Not a quote, like the parameter `$1`
-                None => TokenKind::Other,
+                None => (TokenKind::Other, 1),
             },
-            ('-', Some('-')) => {
-                self.skip_while(|c| !matches!(c, '\n' | '\r'));
-                TokenKind::Comment
-            }
-            ('/', Some('*')) => {
-                self.chars.next();
-                self.skip_block_comment();
-                TokenKind::Comment
-            }
-            ('(', _) => TokenKind::OpenParen,
-            (')', _) => TokenKind::CloseParen,
-            (';', _) => TokenKind::Semicolon,
-            _ if is_space(c) => {
-                self.skip_while(is_space);
-                TokenKind::Whitespace
-            }
-            _ if is_ident_start(c) => {
-                self.skip_while(is_ident_char);
-                TokenKind::Identifier
-            }
-            _ => TokenKind::Other,
+            ('-', Some('-')) => (TokenKind::Comment, line_comment_len(rest)),
+            ('/', Some('*')) => (TokenKind::Comment, block_comment_len(rest)),
+            ('(', _) => (TokenKind::OpenParen, 1),
+            (')', _) => (TokenKind::CloseParen, 1),
+            (';', _) => (TokenKind::Semicolon, 1),
+            _ if is_space(c) => (TokenKind::Whitespace, prefix_len(rest, is_space)),
+            _ if is_ident_start(c) => (TokenKind::Identifier, prefix_len(rest, is_ident_char)),
+            _ => (TokenKind::Other, c.len_utf8()),
         };
 
-        let end = self.offset();
-        Some(Token {
+        let token = Token {
             kind,
-            start,
-            text: &self.sql[start..end],
-        })
+            start: self.pos,
+            text: &rest[..len],
+        };
+        self.pos += len;
+        Some(token)
     }
+}
+
+/// Length in bytes of the longest prefix of `s` whose characters all satisfy
+/// `predicate`.
+fn prefix_len(s: &str, predicate: impl Fn(char) -> bool) -> usize {
+    s.find(|c: char| !predicate(c)).unwrap_or(s.len())
+}
+
+/// Length in bytes of the quoted token that starts `s`, from its opening
+/// `delimiter` through its closing one. Unterminated input runs to the end.
+fn quoted_len(s: &str, delimiter: char, backslash: Backslash) -> usize {
+    let mut chars = s.char_indices().skip(1).peekable();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '\\' if backslash == Backslash::Escapes => {
+                chars.next();
+            }
+            c if c == delimiter => {
+                // A doubled delimiter is escaped
+                let escaped = chars.next_if(|&(_, n)| n == delimiter).is_some();
+                if !escaped {
+                    return i + c.len_utf8();
+                }
+            }
+            _ => {}
+        }
+    }
+    s.len()
+}
+
+/// Length in bytes of the `--` comment that starts `s`, up to but not
+/// including the newline.
+fn line_comment_len(s: &str) -> usize {
+    s.find(['\n', '\r']).unwrap_or(s.len())
+}
+
+/// Length in bytes of the `/* */` comment that starts `s`. Comments nest.
+/// Unterminated input runs to the end.
+fn block_comment_len(s: &str) -> usize {
+    let mut chars = s.char_indices().skip(2).peekable();
+    let mut depth = 1;
+    while let Some((i, c)) = chars.next() {
+        let next = chars.peek().map(|&(_, n)| n);
+
+        match (c, next) {
+            ('/', Some('*')) => {
+                chars.next();
+                depth += 1;
+            }
+            ('*', Some('/')) => {
+                chars.next();
+                depth -= 1;
+                if depth == 0 {
+                    return i + "*/".len();
+                }
+            }
+            _ => {}
+        }
+    }
+    s.len()
 }
 
 /// Whether `c` is whitespace to Postgres: space, `\t`, `\n`, `\r`, `\f`, or
