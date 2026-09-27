@@ -1,6 +1,5 @@
-//! Rough port of parts of
-//! @postgres/postgres/blob/master/src/fe_utils/psqlscan.l for splitting a SQL
-//! string on statement boundaries.
+//! Splits SQL into statements. A rough port of parts of psql's lexer,
+//! `src/fe_utils/psqlscan.l` in the PostgreSQL source.
 
 use std::{iter::Peekable, str::CharIndices};
 
@@ -181,23 +180,18 @@ fn split_statements(sql: &str) -> Vec<&str> {
                 statement_start = i + 1;
                 state.end_statement();
             }
-            (c, _) if is_ident_start(c) => {
-                // Indices are byte offsets, and a char can span several bytes
-                let mut end = i + c.len_utf8();
-                while let Some((j, n)) = chars.next_if(|&(_, n)| is_ident_char(n)) {
-                    end = j + n.len_utf8();
-                }
-
-                let identifier = &sql[i..end];
+            _ if is_ident_start(c) => {
+                let identifier = leading_identifier(&sql[i..]);
+                skip_to(&mut chars, i + identifier.len());
                 state.track_identifier(identifier);
             }
             _ => {}
         }
     }
 
-    let closing_statement = &sql[statement_start..];
-    if !closing_statement.is_empty() {
-        statements.push(closing_statement)
+    let tail = &sql[statement_start..];
+    if !tail.is_empty() {
+        statements.push(tail);
     }
 
     statements
@@ -213,6 +207,12 @@ fn is_ident_start(c: char) -> bool {
 /// character: anything that can start one, plus digits and `$`.
 fn is_ident_char(c: char) -> bool {
     is_ident_start(c) || c.is_ascii_digit() || c == '$'
+}
+
+/// The unquoted identifier at the start of `s`.
+fn leading_identifier(s: &str) -> &str {
+    let len = s.find(|c: char| !is_ident_char(c)).unwrap_or(s.len());
+    &s[..len]
 }
 
 /// Consumes the rest of a quoted token through its closing `delimiter`.
