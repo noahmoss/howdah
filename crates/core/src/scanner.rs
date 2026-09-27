@@ -158,73 +158,31 @@ struct Statement<'a> {
 /// surrounding whitespace, so the texts concatenate back to `sql`. Text
 /// after the last `;` becomes a final statement.
 fn split_statements(sql: &str) -> Vec<Statement<'_>> {
-    let mut chars = sql.char_indices().peekable();
     let mut statements = Vec::new();
     let mut statement_start = 0;
     let mut has_content = false;
     let mut state = ScanState::default();
 
-    while let Some((i, c)) = chars.next() {
-        let next = chars.peek().map(|&(_, n)| n);
+    for token in Lexer::new(sql) {
+        has_content |= token.kind.is_content();
 
-        let is_content = match (c, next) {
-            ('\'', _) => {
-                skip_quoted(&mut chars, '\'', Backslash::Literal);
-                true
-            }
-            ('"', _) => {
-                skip_quoted(&mut chars, '"', Backslash::Literal);
-                true
-            }
-            // Escape string
-            ('e' | 'E', Some('\'')) => {
-                chars.next();
-                skip_quoted(&mut chars, '\'', Backslash::Escapes);
-                true
-            }
-            ('$', _) => {
-                skip_dollar_quoted(&mut chars, sql, i);
-                true
-            }
-            ('-', Some('-')) => {
-                chars.next();
-                skip_line_comment(&mut chars);
-                false
-            }
-            ('/', Some('*')) => {
-                chars.next();
-                skip_block_comment(&mut chars);
-                false
-            }
-            ('(', _) => {
-                state.open_paren();
-                true
-            }
-            (')', _) => {
-                state.close_paren();
-                true
-            }
-            (';', _) if state.at_boundary() => {
+        match token.kind {
+            TokenKind::OpenParen => state.open_paren(),
+            TokenKind::CloseParen => state.close_paren(),
+            TokenKind::Identifier => state.track_identifier(token.text),
+            TokenKind::Semicolon if state.at_boundary() => {
+                let end = token.start + token.text.len();
                 statements.push(Statement {
                     start: statement_start,
-                    text: &sql[statement_start..i + 1],
+                    text: &sql[statement_start..end],
                     has_content,
                 });
-                statement_start = i + 1;
+                statement_start = end;
                 has_content = false;
                 state.end_statement();
-                false
             }
-            _ if is_ident_start(c) => {
-                let identifier = leading_identifier(&sql[i..]);
-                skip_to(&mut chars, i + identifier.len());
-                state.track_identifier(identifier);
-                true
-            }
-            _ => !c.is_whitespace(),
-        };
-
-        has_content |= is_content;
+            _ => {}
+        }
     }
 
     let tail = &sql[statement_start..];
@@ -239,6 +197,181 @@ fn split_statements(sql: &str) -> Vec<Statement<'_>> {
     statements
 }
 
+/// A run of SQL that [`split_statements`] treats as one unit.
+#[derive(Debug)]
+struct Token<'a> {
+    kind: TokenKind,
+    /// Byte offset of `text` in the original SQL.
+    start: usize,
+    text: &'a str,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum TokenKind {
+    Whitespace,
+    /// A `--` or `/* */` comment.
+    Comment,
+    /// An unquoted identifier or keyword.
+    Identifier,
+    /// A `"quoted"` identifier.
+    QuotedIdentifier,
+    /// A `'...'`, `E'...'`, or dollar-quoted string.
+    String,
+    OpenParen,
+    CloseParen,
+    Semicolon,
+    /// Any other single character.
+    Other,
+}
+
+impl TokenKind {
+    /// Whether the token makes a statement worth sending. A `;` doesn't; it
+    /// only ends one.
+    fn is_content(self) -> bool {
+        !matches!(self, Self::Whitespace | Self::Comment | Self::Semicolon)
+    }
+}
+
+/// Breaks SQL into [`Token`]s. Unterminated quotes and comments run to the end
+/// of the input.
+struct Lexer<'a> {
+    sql: &'a str,
+    chars: Peekable<CharIndices<'a>>,
+}
+
+impl<'a> Lexer<'a> {
+    fn new(sql: &'a str) -> Self {
+        Self {
+            sql,
+            chars: sql.char_indices().peekable(),
+        }
+    }
+
+    /// Byte offset of the next unconsumed character.
+    fn offset(&mut self) -> usize {
+        self.chars.peek().map_or(self.sql.len(), |&(i, _)| i)
+    }
+
+    fn skip_while(&mut self, mut predicate: impl FnMut(char) -> bool) {
+        while self.chars.next_if(|&(_, c)| predicate(c)).is_some() {}
+    }
+
+    /// Advances to byte offset `end`.
+    fn skip_to(&mut self, end: usize) {
+        while self.chars.next_if(|&(i, _)| i < end).is_some() {}
+    }
+
+    /// Consumes the rest of a quoted token through its closing `delimiter`.
+    fn skip_quoted(&mut self, delimiter: char, backslash: Backslash) {
+        while let Some((_, c)) = self.chars.next() {
+            match c {
+                '\\' if backslash == Backslash::Escapes => {
+                    self.chars.next();
+                }
+                c if c == delimiter => {
+                    // A doubled delimiter is escaped
+                    let escaped = self.chars.next_if(|&(_, n)| n == delimiter).is_some();
+                    if !escaped {
+                        return;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Consumes the rest of a `/* */` comment, which can nest.
+    fn skip_block_comment(&mut self) {
+        let mut depth = 1;
+        while let Some((_, c)) = self.chars.next() {
+            let next = self.chars.peek().map(|&(_, n)| n);
+
+            match (c, next) {
+                ('/', Some('*')) => {
+                    self.chars.next();
+                    depth += 1;
+                }
+                ('*', Some('/')) => {
+                    self.chars.next();
+                    depth -= 1;
+                    if depth == 0 {
+                        return;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+impl<'a> Iterator for Lexer<'a> {
+    type Item = Token<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (start, c) = self.chars.next()?;
+        let next = self.chars.peek().map(|&(_, n)| n);
+
+        let kind = match (c, next) {
+            ('\'', _) => {
+                self.skip_quoted('\'', Backslash::Literal);
+                TokenKind::String
+            }
+            ('"', _) => {
+                self.skip_quoted('"', Backslash::Literal);
+                TokenKind::QuotedIdentifier
+            }
+            // Escape string
+            ('e' | 'E', Some('\'')) => {
+                self.chars.next();
+                self.skip_quoted('\'', Backslash::Escapes);
+                TokenKind::String
+            }
+            ('$', _) => match dollar_quote_len(&self.sql[start..]) {
+                Some(len) => {
+                    self.skip_to(start + len);
+                    TokenKind::String
+                }
+                // Not a quote, like the parameter `$1`
+                None => TokenKind::Other,
+            },
+            ('-', Some('-')) => {
+                self.skip_while(|c| !matches!(c, '\n' | '\r'));
+                TokenKind::Comment
+            }
+            ('/', Some('*')) => {
+                self.chars.next();
+                self.skip_block_comment();
+                TokenKind::Comment
+            }
+            ('(', _) => TokenKind::OpenParen,
+            (')', _) => TokenKind::CloseParen,
+            (';', _) => TokenKind::Semicolon,
+            _ if is_space(c) => {
+                self.skip_while(is_space);
+                TokenKind::Whitespace
+            }
+            _ if is_ident_start(c) => {
+                self.skip_while(is_ident_char);
+                TokenKind::Identifier
+            }
+            _ => TokenKind::Other,
+        };
+
+        let end = self.offset();
+        Some(Token {
+            kind,
+            start,
+            text: &self.sql[start..end],
+        })
+    }
+}
+
+/// Whether `c` is whitespace to Postgres: space, `\t`, `\n`, `\r`, `\f`, or
+/// `\v`.
+fn is_space(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0B' | '\x0C')
+}
+
 /// Whether `c` can start an unquoted identifier: an ASCII letter, `_`, or any
 /// non-ASCII character.
 fn is_ident_start(c: char) -> bool {
@@ -249,40 +382,6 @@ fn is_ident_start(c: char) -> bool {
 /// character: anything that can start one, plus digits and `$`.
 fn is_ident_char(c: char) -> bool {
     is_ident_start(c) || c.is_ascii_digit() || c == '$'
-}
-
-/// The unquoted identifier at the start of `s`.
-fn leading_identifier(s: &str) -> &str {
-    let len = s.find(|c: char| !is_ident_char(c)).unwrap_or(s.len());
-    &s[..len]
-}
-
-/// Consumes the rest of a quoted token through its closing `delimiter`.
-/// Unterminated input is consumed to the end.
-fn skip_quoted(chars: &mut Peekable<CharIndices>, delimiter: char, backslash: Backslash) {
-    while let Some((_, c)) = chars.next() {
-        match c {
-            '\\' if backslash == Backslash::Escapes => {
-                chars.next();
-            }
-            c if c == delimiter => {
-                // A doubled delimiter is escaped
-                let escaped = chars.next_if(|&(_, n)| n == delimiter).is_some();
-                if !escaped {
-                    return;
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Consumes the rest of a dollar-quoted string if the `$` at byte `start` opens
-/// one. Does nothing for a `$` that doesn't, like the parameter `$1`.
-fn skip_dollar_quoted(chars: &mut Peekable<CharIndices>, sql: &str, start: usize) {
-    if let Some(len) = dollar_quote_len(&sql[start..]) {
-        skip_to(chars, start + len);
-    }
 }
 
 /// If `s` starts with a dollar-quoted string (`$$...$$` or `$tag$...$tag$`),
@@ -304,40 +403,6 @@ fn dollar_quote_len(s: &str) -> Option<usize> {
         None => s.len(), // unterminated
     };
     Some(len)
-}
-
-/// Advances `chars` to byte offset `end`.
-fn skip_to(chars: &mut Peekable<CharIndices>, end: usize) {
-    while chars.next_if(|&(j, _)| j < end).is_some() {}
-}
-
-/// Consumes the rest of a `--` comment, up to but not including the newline.
-fn skip_line_comment(chars: &mut Peekable<CharIndices>) {
-    while chars.next_if(|&(_, n)| !matches!(n, '\n' | '\r')).is_some() {}
-}
-
-/// Consumes the rest of a `/* */` comment, which can nest.
-/// Unterminated input is consumed to the end.
-fn skip_block_comment(chars: &mut Peekable<CharIndices>) {
-    let mut depth = 1;
-    while let Some((_, c)) = chars.next() {
-        let next = chars.peek().map(|&(_, n)| n);
-
-        match (c, next) {
-            ('/', Some('*')) => {
-                chars.next();
-                depth += 1;
-            }
-            ('*', Some('/')) => {
-                chars.next();
-                depth -= 1;
-                if depth == 0 {
-                    return;
-                }
-            }
-            _ => {}
-        }
-    }
 }
 
 #[cfg(test)]
