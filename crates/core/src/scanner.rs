@@ -4,19 +4,21 @@
 
 use std::{iter::Peekable, str::CharIndices};
 
-/// Identifier keywords that impact scanning behavior
-#[derive(Clone, Copy, Default)]
+/// Keywords that identify a `CREATE [OR REPLACE] {FUNCTION | PROCEDURE}`
+/// statement.
+#[derive(Clone, Copy)]
 enum Keyword {
     Create,
     Or,
     Replace,
     Function,
     Procedure,
-    #[default]
+    /// Any other identifier.
     Other,
 }
 
 impl Keyword {
+    /// Classifies an identifier, ignoring ASCII case.
     fn from_identifier(identifier: &str) -> Self {
         match identifier {
             s if s.eq_ignore_ascii_case("create") => Self::Create,
@@ -29,70 +31,123 @@ impl Keyword {
     }
 }
 
-/// How a backslash inside a quoted token is treated
+/// How a backslash inside a quoted token is treated.
 #[derive(Clone, Copy, PartialEq)]
 enum Backslash {
+    /// An ordinary character.
     Literal,
-    /// Escapes the next character
+    /// Escapes the next character, so `\'` doesn't close the string.
     Escapes,
 }
 
+/// Nesting and keyword state that decides whether a `;` ends the current
+/// statement.
 #[derive(Default)]
 struct ScanState {
-    paren_depth: i32,
-    begin_depth: i32,
-    init_idents: [Keyword; 4],
-    init_idents_count: usize,
+    /// Open parentheses.
+    paren_depth: u32,
+    /// Open `BEGIN` and `CASE` blocks in a routine definition. Nonzero means
+    /// we're inside a `BEGIN ATOMIC ... END` body.
+    block_depth: u32,
+    /// Keywords of the current statement's first identifiers, used to
+    /// recognize a routine definition.
+    leading_keywords: Vec<Keyword>,
 }
 
 impl ScanState {
-    /// Port of psqlscan_track_identifier
+    /// Long enough for the longest prefix, `CREATE OR REPLACE FUNCTION`.
+    const MAX_LEADING_KEYWORDS: usize = 4;
+
+    fn open_paren(&mut self) {
+        self.paren_depth += 1;
+    }
+
+    /// Ignores an unmatched `)` rather than going negative.
+    fn close_paren(&mut self) {
+        self.paren_depth = self.paren_depth.saturating_sub(1);
+    }
+
+    /// Whether a `;` here ends the statement.
+    fn at_boundary(&self) -> bool {
+        self.paren_depth == 0 && self.block_depth == 0
+    }
+
+    /// Resets per-statement keyword tracking after a boundary.
+    fn end_statement(&mut self) {
+        self.leading_keywords.clear();
+    }
+
+    /// Tracks `BEGIN ATOMIC ... END` routine bodies, whose `;`s don't end the
+    /// statement:
+    ///
+    /// ```sql
+    /// CREATE FUNCTION f() RETURNS int BEGIN ATOMIC
+    ///     SELECT CASE WHEN true THEN 1 END;  -- not a boundary
+    /// END;                                   -- boundary
+    /// ```
+    ///
+    /// - `BEGIN` only opens a block in a routine definition, so a transaction's
+    ///   `BEGIN;` is still a boundary.
+    /// - Inside a block, `CASE` opens one too, so its `END` doesn't close the
+    ///   body.
+    /// - Identifiers inside parentheses are ignored, so a parameter named
+    ///   `begin` doesn't open a block.
+    ///
+    /// Port of `psqlscan_track_identifier`.
     fn track_identifier(&mut self, identifier: &str) {
         if self.paren_depth != 0 {
             return;
         }
 
-        if self.init_idents_count == 0 {
-            self.init_idents.fill(Keyword::Other);
-        }
-        self.record_initial_keyword(identifier);
+        self.record_leading_keyword(identifier);
 
         if self.is_create_routine() {
             if self.opens_block(identifier) {
-                self.begin_depth += 1;
+                self.block_depth += 1;
             } else if self.closes_block(identifier) {
-                self.begin_depth -= 1;
+                self.block_depth -= 1;
             }
         }
     }
 
+    /// `BEGIN`, or `CASE` inside an open block.
     fn opens_block(&self, identifier: &str) -> bool {
         identifier.eq_ignore_ascii_case("begin")
-            || (identifier.eq_ignore_ascii_case("case") && self.begin_depth > 0)
+            || (identifier.eq_ignore_ascii_case("case") && self.block_depth > 0)
     }
 
+    /// `END` of an open block.
     fn closes_block(&self, identifier: &str) -> bool {
-        identifier.eq_ignore_ascii_case("end") && self.begin_depth > 0
+        identifier.eq_ignore_ascii_case("end") && self.block_depth > 0
     }
 
-    fn record_initial_keyword(&mut self, identifier: &str) {
-        if self.init_idents_count < self.init_idents.len() {
-            self.init_idents[self.init_idents_count] = Keyword::from_identifier(identifier);
-            self.init_idents_count += 1;
+    /// Stores the identifier's keyword if it's among the statement's first
+    /// few.
+    fn record_leading_keyword(&mut self, identifier: &str) {
+        if self.leading_keywords.len() < Self::MAX_LEADING_KEYWORDS {
+            self.leading_keywords
+                .push(Keyword::from_identifier(identifier));
         }
     }
 
-    /// Does the current input match CREATE [OR REPLACE] {FUNCTION|PROCEDURE}?
+    /// Whether the statement starts with
+    /// `CREATE [OR REPLACE] {FUNCTION | PROCEDURE}`.
     fn is_create_routine(&self) -> bool {
         use Keyword::{Create, Function, Or, Procedure, Replace};
 
         matches!(
-            self.init_idents,
-            [Create, Function | Procedure, _, _] | [Create, Or, Replace, Function | Procedure]
+            self.leading_keywords.as_slice(),
+            [Create, Function | Procedure, ..] | [Create, Or, Replace, Function | Procedure, ..]
         )
     }
 }
 
+/// Splits `sql` into statements the way psql does, without parsing it.
+///
+/// A `;` ends a statement unless it's inside quotes, a comment, parentheses,
+/// or a `BEGIN ATOMIC` routine body. Each statement keeps its `;` and
+/// surrounding whitespace, so the slices concatenate back to `sql`. Text
+/// after the last `;` becomes a final statement.
 fn split_statements(sql: &str) -> Vec<&str> {
     let mut chars = sql.char_indices().peekable();
     let mut statements = Vec::new();
@@ -118,22 +173,19 @@ fn split_statements(sql: &str) -> Vec<&str> {
                 chars.next();
                 skip_block_comment(&mut chars);
             }
-            ('(', _) => {
-                state.paren_depth += 1;
-            }
-            (')', _) => {
-                if state.paren_depth > 0 {
-                    state.paren_depth -= 1;
-                }
-            }
-            (';', _) if state.paren_depth == 0 && state.begin_depth == 0 => {
+            ('(', _) => state.open_paren(),
+            (')', _) => state.close_paren(),
+            (';', _) if state.at_boundary() => {
                 statements.push(&sql[statement_start..i + 1]);
                 statement_start = i + 1;
-                state.init_idents_count = 0;
+                state.end_statement();
             }
-            (c, _) if ident_start(c) => {
-                while chars.next_if(|&(_, n)| ident_cont(n)).is_some() {}
-                let end = chars.peek().map_or(sql.len(), |&(i_next, _)| i_next);
+            (c, _) if is_ident_start(c) => {
+                // Indices are byte offsets, and a char can span several bytes
+                let mut end = i + c.len_utf8();
+                while let Some((j, n)) = chars.next_if(|&(_, n)| is_ident_char(n)) {
+                    end = j + n.len_utf8();
+                }
 
                 let identifier = &sql[i..end];
                 state.track_identifier(identifier);
@@ -150,18 +202,20 @@ fn split_statements(sql: &str) -> Vec<&str> {
     statements
 }
 
-/// Start of an identifier: [A-Za-z\200-\377_]
-fn ident_start(c: char) -> bool {
+/// Whether `c` can start an unquoted identifier: an ASCII letter, `_`, or any
+/// non-ASCII character.
+fn is_ident_start(c: char) -> bool {
     c.is_ascii_alphabetic() || !c.is_ascii() || c == '_'
 }
 
-/// Continuation of an identifier: [A-Za-z\200-\377_0-9\$]
-fn ident_cont(c: char) -> bool {
-    ident_start(c) || c.is_ascii_digit() || c == '$'
+/// Whether `c` can appear in an unquoted identifier after the first
+/// character: anything that can start one, plus digits and `$`.
+fn is_ident_char(c: char) -> bool {
+    is_ident_start(c) || c.is_ascii_digit() || c == '$'
 }
 
-/// Consume the rest of a quoted token through its closing delimiter.
-/// Unterminated input consumes to the end.
+/// Consumes the rest of a quoted token through its closing `delimiter`.
+/// Unterminated input is consumed to the end.
 fn skip_quoted(chars: &mut Peekable<CharIndices>, delimiter: char, backslash: Backslash) {
     while let Some((_, c)) = chars.next() {
         match c {
@@ -180,13 +234,13 @@ fn skip_quoted(chars: &mut Peekable<CharIndices>, delimiter: char, backslash: Ba
     }
 }
 
-/// Consume the rest of a `--` comment, up to but not including the newline.
+/// Consumes the rest of a `--` comment, up to but not including the newline.
 fn skip_line_comment(chars: &mut Peekable<CharIndices>) {
     while chars.next_if(|&(_, n)| !matches!(n, '\n' | '\r')).is_some() {}
 }
 
-/// Consume the rest of a `/* */` comment, which can nest.
-/// Unterminated input consumes to the end.
+/// Consumes the rest of a `/* */` comment, which can nest.
+/// Unterminated input is consumed to the end.
 fn skip_block_comment(chars: &mut Peekable<CharIndices>) {
     let mut depth = 1;
     while let Some((_, c)) = chars.next() {
@@ -560,8 +614,21 @@ END;",
     }
 
     #[test]
-    fn ignores_block_keywords_inside_comments() {
+    fn ignores_comment_markers_inside_other_comments() {
+        assert_not_split("SELECT 1 -- /*\n;");
+        assert_not_split("SELECT 1 /* -- */;");
+    }
+
+    #[test]
+    fn comments_between_routine_keywords_are_ignored() {
         assert_not_split("CREATE /* x */ FUNCTION f() RETURNS int BEGIN ATOMIC SELECT 1; END;");
+        assert_not_split(
+            "CREATE -- x\nOR REPLACE FUNCTION f() RETURNS int BEGIN ATOMIC SELECT 1; END;",
+        );
+    }
+
+    #[test]
+    fn ignores_block_keywords_inside_comments() {
         assert_not_split("CREATE FUNCTION f() RETURNS int -- begin\nRETURN 1;");
         assert_not_split("CREATE FUNCTION f() RETURNS int BEGIN ATOMIC SELECT 1 /* end; */; END;");
     }
