@@ -1,5 +1,6 @@
-//! Rough port of parts of @postgres/postgres/blob/master/src/fe_utils/psqlscan.l
-//! for splitting a SQL string on statement boundaries.
+//! Rough port of parts of
+//! @postgres/postgres/blob/master/src/fe_utils/psqlscan.l for splitting a SQL
+//! string on statement boundaries.
 
 use std::{iter::Peekable, str::CharIndices};
 
@@ -26,6 +27,14 @@ impl Keyword {
             _ => Self::Other,
         }
     }
+}
+
+/// How a backslash inside a quoted token is treated
+#[derive(Clone, Copy, PartialEq)]
+enum Backslash {
+    Literal,
+    /// Escapes the next character (psql's `xeescape`)
+    Escapes,
 }
 
 #[derive(Default)]
@@ -93,24 +102,31 @@ fn split_statements(sql: &str) -> Vec<&str> {
     let mut state = ScanState::default();
 
     while let Some((i, c)) = chars.next() {
-        match c {
-            '\'' => skip_quoted(&mut chars, '\''),
-            '"' => skip_quoted(&mut chars, '"'),
-            '(' => {
+        let next = chars.peek().map(|&(_, n)| n);
+
+        match (c, next) {
+            ('\'', _) => skip_quoted(&mut chars, '\'', Backslash::Literal),
+            ('"', _) => skip_quoted(&mut chars, '"', Backslash::Literal),
+            // Escape string (psql's `xestart`)
+            ('e' | 'E', Some('\'')) => {
+                chars.next(); // skip the opening quote
+                skip_quoted(&mut chars, '\'', Backslash::Escapes);
+            }
+            ('(', _) => {
                 state.paren_depth += 1;
             }
-            ')' => {
+            (')', _) => {
                 if state.paren_depth > 0 {
                     state.paren_depth -= 1;
                 }
             }
-            ';' if state.paren_depth == 0 && state.begin_depth == 0 => {
+            (';', _) if state.paren_depth == 0 && state.begin_depth == 0 => {
                 statements.push(&sql[statement_start..i + 1]);
                 statement_start = i + 1;
                 state.init_idents_count = 0;
             }
-            c if ident_start(c) => {
-                while chars.next_if(|&(_, next)| ident_cont(next)).is_some() {}
+            (c, _) if ident_start(c) => {
+                while chars.next_if(|&(_, n)| ident_cont(n)).is_some() {}
                 let end = chars.peek().map_or(sql.len(), |&(i_next, _)| i_next);
 
                 let identifier = &sql[i..end];
@@ -140,15 +156,20 @@ fn ident_cont(c: char) -> bool {
 
 /// Consume the rest of a quoted token through its closing delimiter.
 /// Unterminated input consumes to the end.
-fn skip_quoted(chars: &mut Peekable<CharIndices>, delimiter: char) {
+fn skip_quoted(chars: &mut Peekable<CharIndices>, delimiter: char, backslash: Backslash) {
     while let Some((_, c)) = chars.next() {
-        if c != delimiter {
-            continue;
-        }
-        // A doubled delimiter is escaped (psql's `xqdouble` / `xddouble`)
-        let escaped = chars.next_if(|&(_, next)| next == delimiter).is_some();
-        if !escaped {
-            return;
+        match c {
+            '\\' if backslash == Backslash::Escapes => {
+                chars.next();
+            }
+            c if c == delimiter => {
+                // A doubled delimiter is escaped (psql's `xqdouble` / `xddouble`)
+                let escaped = chars.next_if(|&(_, next)| next == delimiter).is_some();
+                if !escaped {
+                    return;
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -413,6 +434,32 @@ END;",
     #[test]
     fn keeps_unterminated_double_quote_as_one_tail() {
         let sql = r#"SELECT 1 AS "abc; SELECT 2;"#;
+        assert_eq!(split_statements(sql), [sql]);
+    }
+
+    #[test]
+    fn backslash_escapes_do_not_close_escape_string() {
+        for statement in [
+            r"SELECT E'it\'s; fine';",
+            r"SELECT e'\';';",
+            r"SELECT E'\\';",
+            r"SELECT E'\\\';';",
+            r"SELECT E'it''s;';",
+        ] {
+            assert_not_split(statement);
+        }
+    }
+
+    #[test]
+    fn e_inside_identifier_does_not_start_escape_string() {
+        for statement in [r"SELECT text'a\';", "SELECT e;"] {
+            assert_not_split(statement);
+        }
+    }
+
+    #[test]
+    fn keeps_unterminated_escape_string_as_one_tail() {
+        let sql = r"SELECT E'abc\'; SELECT 2;";
         assert_eq!(split_statements(sql), [sql]);
     }
 }
