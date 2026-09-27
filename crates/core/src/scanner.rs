@@ -5,144 +5,6 @@
 //! PostgreSQL 9.1), so a backslash in a plain `'...'` string is an ordinary
 //! character.
 
-/// Keywords that identify a `CREATE [OR REPLACE] {FUNCTION | PROCEDURE}`
-/// statement.
-#[derive(Clone, Copy)]
-enum Keyword {
-    Create,
-    Or,
-    Replace,
-    Function,
-    Procedure,
-    /// Any other identifier.
-    Other,
-}
-
-impl Keyword {
-    /// Classifies an identifier, ignoring ASCII case.
-    fn from_identifier(identifier: &str) -> Self {
-        match identifier {
-            s if s.eq_ignore_ascii_case("create") => Self::Create,
-            s if s.eq_ignore_ascii_case("or") => Self::Or,
-            s if s.eq_ignore_ascii_case("replace") => Self::Replace,
-            s if s.eq_ignore_ascii_case("function") => Self::Function,
-            s if s.eq_ignore_ascii_case("procedure") => Self::Procedure,
-            _ => Self::Other,
-        }
-    }
-}
-
-/// How a backslash inside a quoted token is treated.
-#[derive(Clone, Copy, PartialEq)]
-enum Backslash {
-    /// An ordinary character.
-    Literal,
-    /// Escapes the next character, so `\'` doesn't close the string.
-    Escapes,
-}
-
-/// Nesting and keyword state that decides whether a `;` ends the current
-/// statement.
-#[derive(Default)]
-struct ScanState {
-    /// Open parentheses.
-    paren_depth: u32,
-    /// Open `BEGIN` and `CASE` blocks in a routine definition. Nonzero means
-    /// we're inside a `BEGIN ATOMIC ... END` body.
-    block_depth: u32,
-    /// Keywords of the current statement's first identifiers, used to
-    /// recognize a routine definition.
-    leading_keywords: Vec<Keyword>,
-}
-
-impl ScanState {
-    /// Long enough for the longest prefix, `CREATE OR REPLACE FUNCTION`.
-    const MAX_LEADING_KEYWORDS: usize = 4;
-
-    fn open_paren(&mut self) {
-        self.paren_depth += 1;
-    }
-
-    /// Ignores an unmatched `)` rather than going negative.
-    fn close_paren(&mut self) {
-        self.paren_depth = self.paren_depth.saturating_sub(1);
-    }
-
-    /// Whether a `;` here ends the statement.
-    fn at_boundary(&self) -> bool {
-        self.paren_depth == 0 && self.block_depth == 0
-    }
-
-    /// Resets per-statement keyword tracking after a boundary.
-    fn end_statement(&mut self) {
-        self.leading_keywords.clear();
-    }
-
-    /// Tracks `BEGIN ATOMIC ... END` routine bodies, whose `;`s don't end the
-    /// statement:
-    ///
-    /// ```sql
-    /// CREATE FUNCTION f() RETURNS int BEGIN ATOMIC
-    ///     SELECT CASE WHEN true THEN 1 END;  -- not a boundary
-    /// END;                                   -- boundary
-    /// ```
-    ///
-    /// - `BEGIN` only opens a block in a routine definition, so a transaction's
-    ///   `BEGIN;` is still a boundary.
-    /// - Inside a block, `CASE` opens one too, so its `END` doesn't close the
-    ///   body.
-    /// - Identifiers inside parentheses are ignored, so a parameter named
-    ///   `begin` doesn't open a block.
-    ///
-    /// Port of `psqlscan_track_identifier`.
-    fn track_identifier(&mut self, identifier: &str) {
-        if self.paren_depth != 0 {
-            return;
-        }
-
-        self.record_leading_keyword(identifier);
-
-        if self.is_create_routine() {
-            if self.opens_block(identifier) {
-                self.block_depth += 1;
-            } else if self.closes_block(identifier) {
-                self.block_depth -= 1;
-            }
-        }
-    }
-
-    /// `BEGIN`, or `CASE` inside an open block.
-    fn opens_block(&self, identifier: &str) -> bool {
-        identifier.eq_ignore_ascii_case("begin")
-            || (identifier.eq_ignore_ascii_case("case") && self.block_depth > 0)
-    }
-
-    /// `END` of an open block.
-    fn closes_block(&self, identifier: &str) -> bool {
-        identifier.eq_ignore_ascii_case("end") && self.block_depth > 0
-    }
-
-    /// Stores the identifier's keyword if it's among the statement's first
-    /// few.
-    fn record_leading_keyword(&mut self, identifier: &str) {
-        if self.leading_keywords.len() < Self::MAX_LEADING_KEYWORDS {
-            self.leading_keywords
-                .push(Keyword::from_identifier(identifier));
-        }
-    }
-
-    /// Whether the statement starts with
-    /// `CREATE [OR REPLACE] {FUNCTION | PROCEDURE}`.
-    fn is_create_routine(&self) -> bool {
-        use Keyword::{Create, Function, Or, Procedure, Replace};
-
-        matches!(
-            self.leading_keywords.as_slice(),
-            [Create, Function | Procedure, ..] | [Create, Or, Replace, Function | Procedure, ..]
-        )
-    }
-}
-
 /// One statement found by [`split_statements`].
 #[derive(Debug)]
 struct Statement<'a> {
@@ -197,6 +59,135 @@ fn split_statements(sql: &str) -> Vec<Statement<'_>> {
     }
 
     statements
+}
+
+/// Nesting and keyword state that decides whether a `;` ends the current
+/// statement.
+#[derive(Default)]
+struct ScanState {
+    /// Open parentheses.
+    paren_depth: u32,
+    /// Open `BEGIN` and `CASE` blocks in a routine definition. Nonzero means
+    /// we're inside a `BEGIN ATOMIC ... END` body.
+    block_depth: u32,
+    /// Keywords of the current statement's first identifiers, used to
+    /// recognize a routine definition.
+    leading_keywords: Vec<Keyword>,
+}
+
+impl ScanState {
+    /// Long enough for the longest prefix, `CREATE OR REPLACE FUNCTION`.
+    const MAX_LEADING_KEYWORDS: usize = 4;
+
+    fn open_paren(&mut self) {
+        self.paren_depth += 1;
+    }
+
+    /// Ignores an unmatched `)` rather than going negative.
+    fn close_paren(&mut self) {
+        self.paren_depth = self.paren_depth.saturating_sub(1);
+    }
+
+    /// Tracks `BEGIN ATOMIC ... END` routine bodies, whose `;`s don't end the
+    /// statement:
+    ///
+    /// ```sql
+    /// CREATE FUNCTION f() RETURNS int BEGIN ATOMIC
+    ///     SELECT CASE WHEN true THEN 1 END;  -- not a boundary
+    /// END;                                   -- boundary
+    /// ```
+    ///
+    /// - `BEGIN` only opens a block in a routine definition, so a transaction's
+    ///   `BEGIN;` is still a boundary.
+    /// - Inside a block, `CASE` opens one too, so its `END` doesn't close the
+    ///   body.
+    /// - Identifiers inside parentheses are ignored, so a parameter named
+    ///   `begin` doesn't open a block.
+    ///
+    /// Port of `psqlscan_track_identifier`.
+    fn track_identifier(&mut self, identifier: &str) {
+        if self.paren_depth != 0 {
+            return;
+        }
+
+        self.record_leading_keyword(identifier);
+
+        if self.is_create_routine() {
+            if self.opens_block(identifier) {
+                self.block_depth += 1;
+            } else if self.closes_block(identifier) {
+                self.block_depth -= 1;
+            }
+        }
+    }
+
+    /// Whether a `;` here ends the statement.
+    fn at_boundary(&self) -> bool {
+        self.paren_depth == 0 && self.block_depth == 0
+    }
+
+    /// Resets per-statement keyword tracking after a boundary.
+    fn end_statement(&mut self) {
+        self.leading_keywords.clear();
+    }
+
+    /// Stores the identifier's keyword if it's among the statement's first
+    /// few.
+    fn record_leading_keyword(&mut self, identifier: &str) {
+        if self.leading_keywords.len() < Self::MAX_LEADING_KEYWORDS {
+            self.leading_keywords
+                .push(Keyword::from_identifier(identifier));
+        }
+    }
+
+    /// Whether the statement starts with
+    /// `CREATE [OR REPLACE] {FUNCTION | PROCEDURE}`.
+    fn is_create_routine(&self) -> bool {
+        use Keyword::{Create, Function, Or, Procedure, Replace};
+
+        matches!(
+            self.leading_keywords.as_slice(),
+            [Create, Function | Procedure, ..] | [Create, Or, Replace, Function | Procedure, ..]
+        )
+    }
+
+    /// `BEGIN`, or `CASE` inside an open block.
+    fn opens_block(&self, identifier: &str) -> bool {
+        identifier.eq_ignore_ascii_case("begin")
+            || (identifier.eq_ignore_ascii_case("case") && self.block_depth > 0)
+    }
+
+    /// `END` of an open block.
+    fn closes_block(&self, identifier: &str) -> bool {
+        identifier.eq_ignore_ascii_case("end") && self.block_depth > 0
+    }
+}
+
+/// Keywords that identify a `CREATE [OR REPLACE] {FUNCTION | PROCEDURE}`
+/// statement.
+#[derive(Clone, Copy)]
+enum Keyword {
+    Create,
+    Or,
+    Replace,
+    Function,
+    Procedure,
+    /// Any other identifier.
+    Other,
+}
+
+impl Keyword {
+    /// Classifies an identifier, ignoring ASCII case.
+    fn from_identifier(identifier: &str) -> Self {
+        match identifier {
+            s if s.eq_ignore_ascii_case("create") => Self::Create,
+            s if s.eq_ignore_ascii_case("or") => Self::Or,
+            s if s.eq_ignore_ascii_case("replace") => Self::Replace,
+            s if s.eq_ignore_ascii_case("function") => Self::Function,
+            s if s.eq_ignore_ascii_case("procedure") => Self::Procedure,
+            _ => Self::Other,
+        }
+    }
 }
 
 /// A run of SQL that [`split_statements`] treats as one unit.
@@ -292,10 +283,13 @@ impl<'a> Iterator for Lexer<'a> {
     }
 }
 
-/// Length in bytes of the longest prefix of `s` whose characters all satisfy
-/// `predicate`.
-fn prefix_len(s: &str, predicate: impl Fn(char) -> bool) -> usize {
-    s.find(|c: char| !predicate(c)).unwrap_or(s.len())
+/// How a backslash inside a quoted token is treated.
+#[derive(Clone, Copy, PartialEq)]
+enum Backslash {
+    /// An ordinary character.
+    Literal,
+    /// Escapes the next character, so `\'` doesn't close the string.
+    Escapes,
 }
 
 /// Length in bytes of the quoted token that starts `s`, from its opening
@@ -318,6 +312,27 @@ fn quoted_len(s: &str, delimiter: char, backslash: Backslash) -> usize {
         }
     }
     s.len()
+}
+
+/// If `s` starts with a dollar-quoted string (`$$...$$` or `$tag$...$tag$`),
+/// returns its length in bytes, including both delimiters. Unterminated input
+/// runs to the end.
+fn dollar_quote_len(s: &str) -> Option<usize> {
+    let (tag, _) = s.strip_prefix('$')?.split_once('$')?;
+    // A tag follows identifier rules
+    let valid_tag =
+        tag.chars().all(is_ident_char) && !tag.starts_with(|c: char| c.is_ascii_digit());
+    if !valid_tag {
+        return None;
+    }
+
+    let delimiter = format!("${tag}$");
+    let after_open = &s[delimiter.len()..];
+    let len = match after_open.find(&delimiter) {
+        Some(content_len) => delimiter.len() + content_len + delimiter.len(),
+        None => s.len(), // unterminated
+    };
+    Some(len)
 }
 
 /// Length in bytes of the `--` comment that starts `s`, up to but not
@@ -370,25 +385,10 @@ fn is_ident_char(c: char) -> bool {
     is_ident_start(c) || c.is_ascii_digit() || c == '$'
 }
 
-/// If `s` starts with a dollar-quoted string (`$$...$$` or `$tag$...$tag$`),
-/// returns its length in bytes, including both delimiters. Unterminated input
-/// runs to the end.
-fn dollar_quote_len(s: &str) -> Option<usize> {
-    let (tag, _) = s.strip_prefix('$')?.split_once('$')?;
-    // A tag follows identifier rules
-    let valid_tag =
-        tag.chars().all(is_ident_char) && !tag.starts_with(|c: char| c.is_ascii_digit());
-    if !valid_tag {
-        return None;
-    }
-
-    let delimiter = format!("${tag}$");
-    let after_open = &s[delimiter.len()..];
-    let len = match after_open.find(&delimiter) {
-        Some(content_len) => delimiter.len() + content_len + delimiter.len(),
-        None => s.len(), // unterminated
-    };
-    Some(len)
+/// Length in bytes of the longest prefix of `s` whose characters all satisfy
+/// `predicate`.
+fn prefix_len(s: &str, predicate: impl Fn(char) -> bool) -> usize {
+    s.find(|c: char| !predicate(c)).unwrap_or(s.len())
 }
 
 #[cfg(test)]
