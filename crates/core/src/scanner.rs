@@ -166,6 +166,17 @@ fn skip_quoted(chars: &mut Peekable<CharIndices>, delimiter: char) {
 mod tests {
     use super::split_statements;
 
+    // `statement` stays one statement, and a boundary follows right after it.
+    #[track_caller]
+    fn assert_not_split(statement: &str) {
+        let sql = format!("{statement}SELECT 2;");
+        assert_eq!(
+            split_statements(&sql),
+            [statement, "SELECT 2;"],
+            "{statement}"
+        );
+    }
+
     #[test]
     fn empty_input_has_no_statements() {
         assert!(split_statements("").is_empty());
@@ -217,10 +228,7 @@ mod tests {
 
     #[test]
     fn unmatched_closing_parenthesis_does_not_hide_boundaries() {
-        assert_eq!(
-            split_statements("SELECT 1);SELECT 2;"),
-            ["SELECT 1);", "SELECT 2;"]
-        );
+        assert_not_split("SELECT 1);");
     }
 
     #[test]
@@ -233,27 +241,26 @@ mod tests {
 
     #[test]
     fn keeps_empty_statements_inside_atomic_body() {
-        let routine = "CREATE FUNCTION f() RETURNS boolean\nBEGIN ATOMIC\n;;RETURN false;;\nEND;";
-        let sql = format!("{routine}SELECT 1;");
-        assert_eq!(split_statements(&sql), [routine, "SELECT 1;"]);
+        assert_not_split(
+            "CREATE FUNCTION f() RETURNS boolean\nBEGIN ATOMIC\n;;RETURN false;;\nEND;",
+        );
     }
 
     #[test]
     fn keeps_multiple_statements_inside_atomic_body() {
-        let routine =
-            "CREATE FUNCTION f() RETURNS boolean\nBEGIN ATOMIC\nSELECT 1;\nSELECT false;\nEND;";
-        let sql = format!("{routine}SELECT 1;");
-        assert_eq!(split_statements(&sql), [routine, "SELECT 1;"]);
+        assert_not_split(
+            "CREATE FUNCTION f() RETURNS boolean\nBEGIN ATOMIC\nSELECT 1;\nSELECT false;\nEND;",
+        );
     }
 
     #[test]
     fn case_end_does_not_close_atomic_body() {
-        let routine = "CREATE FUNCTION f(x int) RETURNS boolean LANGUAGE SQL
+        assert_not_split(
+            "CREATE FUNCTION f(x int) RETURNS boolean LANGUAGE SQL
 BEGIN ATOMIC
     SELECT CASE WHEN x % 2 = 0 THEN true ELSE false END;
-END;";
-        let sql = format!("{routine}SELECT 1;");
-        assert_eq!(split_statements(&sql), [routine, "SELECT 1;"]);
+END;",
+        );
     }
 
     #[test]
@@ -265,65 +272,55 @@ END;";
             "CREATE OR REPLACE PROCEDURE",
             "cReAtE oR rEpLaCe fUnCtIoN",
         ] {
-            let routine = format!("{prefix} f() LANGUAGE SQL bEgIn ATOMIC SELECT 1; eNd;");
-            let sql = format!("{routine}SELECT 2;");
-            assert_eq!(
-                split_statements(&sql),
-                [routine.as_str(), "SELECT 2;"],
-                "{prefix}"
-            );
+            assert_not_split(&format!(
+                "{prefix} f() LANGUAGE SQL bEgIn ATOMIC SELECT 1; eNd;"
+            ));
         }
     }
 
     #[test]
     fn requires_routine_keywords_at_start_of_statement() {
-        for first in [
+        for statement in [
             "SELECT CREATE FUNCTION f BEGIN;",
             "CREATE TABLE f BEGIN;",
             "CREATE OR FUNCTION f BEGIN;",
             "CREATE REPLACE FUNCTION f BEGIN;",
         ] {
-            let sql = format!("{first}SELECT 2;");
-            assert_eq!(split_statements(&sql), [first, "SELECT 2;"], "{first}");
+            assert_not_split(statement);
         }
     }
 
     #[test]
     fn keyword_prefixes_in_identifiers_do_not_open_blocks() {
         for identifier in ["beginning", "begin_", "begin1", "begin$tag", "beginé"] {
-            let first = format!("CREATE FUNCTION f() RETURNS int RETURN {identifier};");
-            let sql = format!("{first}SELECT 2;");
-            assert_eq!(
-                split_statements(&sql),
-                [first.as_str(), "SELECT 2;"],
-                "{identifier}"
-            );
+            assert_not_split(&format!(
+                "CREATE FUNCTION f() RETURNS int RETURN {identifier};"
+            ));
         }
     }
 
     #[test]
     fn ignores_block_keywords_inside_parentheses() {
-        let routine =
-            "CREATE FUNCTION f(begin int) RETURNS int BEGIN ATOMIC SELECT (end); SELECT 2; END;";
-        let sql = format!("{routine}SELECT 3;");
-        assert_eq!(split_statements(&sql), [routine, "SELECT 3;"]);
+        assert_not_split(
+            "CREATE FUNCTION f(begin int) RETURNS int BEGIN ATOMIC SELECT (end); SELECT 2; END;",
+        );
     }
 
     #[test]
     fn tracks_nested_case_expressions() {
-        let routine = "CREATE FUNCTION f() RETURNS int BEGIN ATOMIC
+        assert_not_split(
+            "CREATE FUNCTION f() RETURNS int BEGIN ATOMIC
 SELECT CASE WHEN true THEN CASE WHEN false THEN 1 ELSE 2 END ELSE 3 END;
 SELECT 4;
-END;";
-        let sql = format!("{routine}SELECT 5;");
-        assert_eq!(split_statements(&sql), [routine, "SELECT 5;"]);
+END;",
+        );
     }
 
     #[test]
     fn case_outside_atomic_body_does_not_change_block_depth() {
-        let routine = "CREATE FUNCTION f() RETURNS int RETURN CASE WHEN true THEN 1 ELSE 2 END;";
-        let sql = format!("{routine}SELECT 3;");
-        assert_eq!(split_statements(&sql), [routine, "SELECT 3;"]);
+        assert_not_split(
+            "CREATE FUNCTION f() RETURNS int RETURN CASE WHEN true THEN 1 ELSE 2 END;",
+        );
     }
 
     #[test]
@@ -345,22 +342,18 @@ END;";
 
     #[test]
     fn ignores_semicolons_inside_single_quotes() {
-        assert_eq!(
-            split_statements("SELECT ';';SELECT 2;"),
-            ["SELECT ';';", "SELECT 2;"]
-        );
+        assert_not_split("SELECT ';';");
     }
 
     #[test]
     fn doubled_single_quotes_do_not_close_string() {
-        for first in [
+        for statement in [
             "SELECT 'it''s; fine';",
             "SELECT '';",
             "SELECT '''';",
             "SELECT ''';''';",
         ] {
-            let sql = format!("{first}SELECT 2;");
-            assert_eq!(split_statements(&sql), [first, "SELECT 2;"], "{first}");
+            assert_not_split(statement);
         }
     }
 
@@ -384,9 +377,7 @@ END;";
 
     #[test]
     fn prefixed_string_constants_are_quoted() {
-        let first = "SELECT x'1;', B'0;', n'a;', U&'d;';";
-        let sql = format!("{first}SELECT 2;");
-        assert_eq!(split_statements(&sql), [first, "SELECT 2;"]);
+        assert_not_split("SELECT x'1;', B'0;', n'a;', U&'d;';");
     }
 
     #[test]
@@ -397,21 +388,19 @@ END;";
 
     #[test]
     fn ignores_semicolons_and_parentheses_inside_double_quotes() {
-        for first in [
+        for statement in [
             r#"SELECT 1 AS "a;b";"#,
             r#"SELECT 1 AS "(";"#,
             r#"SELECT 1 AS ")";"#,
         ] {
-            let sql = format!("{first}SELECT 2;");
-            assert_eq!(split_statements(&sql), [first, "SELECT 2;"], "{first}");
+            assert_not_split(statement);
         }
     }
 
     #[test]
     fn doubled_double_quotes_do_not_close_identifier() {
-        for first in [r#"SELECT 1 AS "a""b;";"#, r#"SELECT 1 AS """;""";"#] {
-            let sql = format!("{first}SELECT 2;");
-            assert_eq!(split_statements(&sql), [first, "SELECT 2;"], "{first}");
+        for statement in [r#"SELECT 1 AS "a""b;";"#, r#"SELECT 1 AS """;""";"#] {
+            assert_not_split(statement);
         }
     }
 
@@ -425,9 +414,8 @@ END;";
 
     #[test]
     fn each_quote_kind_ignores_the_other() {
-        for first in [r#"SELECT 1 AS "it's";"#, r#"SELECT '"';"#] {
-            let sql = format!("{first}SELECT 2;");
-            assert_eq!(split_statements(&sql), [first, "SELECT 2;"], "{first}");
+        for statement in [r#"SELECT 1 AS "it's";"#, r#"SELECT '"';"#] {
+            assert_not_split(statement);
         }
     }
 
