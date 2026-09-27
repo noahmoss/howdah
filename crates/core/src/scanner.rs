@@ -25,7 +25,7 @@ fn split_statements(sql: &str) -> Vec<Statement<'_>> {
     let mut statements = Vec::new();
     let mut statement_start = 0;
     let mut has_content = false;
-    let mut state = ScanState::default();
+    let mut state = SplitState::default();
 
     for token in Lexer::new(sql) {
         has_content |= token.kind.is_content();
@@ -64,7 +64,7 @@ fn split_statements(sql: &str) -> Vec<Statement<'_>> {
 /// Nesting and keyword state that decides whether a `;` ends the current
 /// statement.
 #[derive(Default)]
-struct ScanState {
+struct SplitState {
     /// Open parentheses.
     paren_depth: u32,
     /// Open `BEGIN` and `CASE` blocks in a routine definition. Nonzero means
@@ -75,7 +75,7 @@ struct ScanState {
     leading_keywords: Vec<Keyword>,
 }
 
-impl ScanState {
+impl SplitState {
     /// Long enough for the longest prefix, `CREATE OR REPLACE FUNCTION`.
     const MAX_LEADING_KEYWORDS: usize = 4;
 
@@ -193,7 +193,7 @@ struct Token<'a> {
     text: &'a str,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug)]
 enum TokenKind {
     Whitespace,
     /// A `--` or `/* */` comment.
@@ -242,10 +242,10 @@ impl<'a> Iterator for Lexer<'a> {
         let rest = &self.sql[self.pos..];
         let mut chars = rest.chars();
         let c = chars.next()?;
-        let next = chars.next();
+        let second = chars.next();
 
         // Lengths are in bytes; literal ones count ASCII characters.
-        let (kind, len) = match (c, next) {
+        let (kind, len) = match (c, second) {
             ('\'', _) => (TokenKind::String, quoted_len(rest, '\'', Literal)),
             ('"', _) => (TokenKind::QuotedIdentifier, quoted_len(rest, '"', Literal)),
             // Escape string
@@ -520,7 +520,7 @@ mod tests {
     }
 
     #[test]
-    fn keeps_empty_statements_inside_atomic_body() {
+    fn empty_statements_inside_atomic_body_are_not_boundaries() {
         assert_not_split(
             "CREATE FUNCTION f() RETURNS boolean\nBEGIN ATOMIC\n;;RETURN false;;\nEND;",
         );
@@ -540,6 +540,9 @@ mod tests {
 BEGIN ATOMIC
     SELECT CASE WHEN x % 2 = 0 THEN true ELSE false END;
 END;",
+        );
+        assert_not_split(
+            "CREATE FUNCTION f() RETURNS text BEGIN ATOMIC SELECT CASE WHEN true THEN 'a'END; END;",
         );
     }
 
@@ -672,6 +675,7 @@ END;",
             r#"SELECT 1 AS "a;b";"#,
             r#"SELECT 1 AS "(";"#,
             r#"SELECT 1 AS ")";"#,
+            r#"SELECT 1 AS "é;";"#,
         ] {
             assert_not_split(statement);
         }
@@ -713,6 +717,7 @@ END;",
             r"SELECT E'\\';",
             r"SELECT E'\\\';';",
             r"SELECT E'it''s;';",
+            r"SELECT E'\é;';",
         ] {
             assert_not_split(statement);
         }
@@ -738,6 +743,7 @@ END;",
             "SELECT 1 -- a; b\r;",
             "SELECT 1 -- a; b\r\n;",
             "-- first; line\nSELECT 1;",
+            "SELECT 1 +-- a; b\n2;",
         ] {
             assert_not_split(statement);
         }
@@ -758,6 +764,7 @@ END;",
             "SELECT /* /* ; */ ; */ 1;",
             "SELECT /*/ ; */ 1;",
             "SELECT /**/ 1;",
+            "SELECT /* é; */ 1;",
         ] {
             assert_not_split(statement);
         }
