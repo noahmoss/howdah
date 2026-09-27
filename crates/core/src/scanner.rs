@@ -33,7 +33,7 @@ impl Keyword {
 #[derive(Clone, Copy, PartialEq)]
 enum Backslash {
     Literal,
-    /// Escapes the next character (psql's `xeescape`)
+    /// Escapes the next character
     Escapes,
 }
 
@@ -95,10 +95,8 @@ impl ScanState {
 
 fn split_statements(sql: &str) -> Vec<&str> {
     let mut chars = sql.char_indices().peekable();
-
     let mut statements = Vec::new();
     let mut statement_start = 0;
-
     let mut state = ScanState::default();
 
     while let Some((i, c)) = chars.next() {
@@ -107,10 +105,18 @@ fn split_statements(sql: &str) -> Vec<&str> {
         match (c, next) {
             ('\'', _) => skip_quoted(&mut chars, '\'', Backslash::Literal),
             ('"', _) => skip_quoted(&mut chars, '"', Backslash::Literal),
-            // Escape string (psql's `xestart`)
+            // Escape string
             ('e' | 'E', Some('\'')) => {
-                chars.next(); // skip the opening quote
+                chars.next();
                 skip_quoted(&mut chars, '\'', Backslash::Escapes);
+            }
+            ('-', Some('-')) => {
+                chars.next();
+                skip_line_comment(&mut chars);
+            }
+            ('/', Some('*')) => {
+                chars.next();
+                skip_block_comment(&mut chars);
             }
             ('(', _) => {
                 state.paren_depth += 1;
@@ -163,9 +169,38 @@ fn skip_quoted(chars: &mut Peekable<CharIndices>, delimiter: char, backslash: Ba
                 chars.next();
             }
             c if c == delimiter => {
-                // A doubled delimiter is escaped (psql's `xqdouble` / `xddouble`)
-                let escaped = chars.next_if(|&(_, next)| next == delimiter).is_some();
+                // A doubled delimiter is escaped
+                let escaped = chars.next_if(|&(_, n)| n == delimiter).is_some();
                 if !escaped {
+                    return;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Consume the rest of a `--` comment, up to but not including the newline.
+fn skip_line_comment(chars: &mut Peekable<CharIndices>) {
+    while chars.next_if(|&(_, n)| !matches!(n, '\n' | '\r')).is_some() {}
+}
+
+/// Consume the rest of a `/* */` comment, which can nest.
+/// Unterminated input consumes to the end.
+fn skip_block_comment(chars: &mut Peekable<CharIndices>) {
+    let mut depth = 1;
+    while let Some((_, c)) = chars.next() {
+        let next = chars.peek().map(|&(_, n)| n);
+
+        match (c, next) {
+            ('/', Some('*')) => {
+                chars.next();
+                depth += 1;
+            }
+            ('*', Some('/')) => {
+                chars.next();
+                depth -= 1;
+                if depth == 0 {
                     return;
                 }
             }
@@ -460,6 +495,80 @@ END;",
     #[test]
     fn keeps_unterminated_escape_string_as_one_tail() {
         let sql = r"SELECT E'abc\'; SELECT 2;";
+        assert_eq!(split_statements(sql), [sql]);
+    }
+
+    #[test]
+    fn line_comment_runs_to_end_of_line() {
+        for statement in [
+            "SELECT 1 -- a; b\n;",
+            "SELECT 1 -- a; b\r;",
+            "SELECT 1 -- a; b\r\n;",
+            "-- first; line\nSELECT 1;",
+        ] {
+            assert_not_split(statement);
+        }
+    }
+
+    #[test]
+    fn keeps_trailing_line_comment_as_its_own_tail() {
+        assert_eq!(
+            split_statements("SELECT 1; -- done;"),
+            ["SELECT 1;", " -- done;"]
+        );
+    }
+
+    #[test]
+    fn ignores_semicolons_inside_block_comments() {
+        for statement in [
+            "SELECT /* ; */ 1;",
+            "SELECT /* /* ; */ ; */ 1;",
+            "SELECT /*/ ; */ 1;",
+            "SELECT /**/ 1;",
+        ] {
+            assert_not_split(statement);
+        }
+    }
+
+    #[test]
+    fn ignores_quotes_inside_comments() {
+        for statement in [
+            "SELECT 1 -- it's\n;",
+            "SELECT 1 /* it's */;",
+            "SELECT 1 /* \" */;",
+            "SELECT 1 /* e' */;",
+        ] {
+            assert_not_split(statement);
+        }
+    }
+
+    #[test]
+    fn ignores_comment_markers_inside_quotes() {
+        for statement in [
+            "SELECT '--';",
+            "SELECT '/*';",
+            r#"SELECT 1 AS "--";"#,
+            r"SELECT E'\'--';",
+        ] {
+            assert_not_split(statement);
+        }
+    }
+
+    #[test]
+    fn lone_dash_and_slash_are_not_comments() {
+        assert_not_split("SELECT 1 - 1 / 1 * 2;");
+    }
+
+    #[test]
+    fn ignores_block_keywords_inside_comments() {
+        assert_not_split("CREATE /* x */ FUNCTION f() RETURNS int BEGIN ATOMIC SELECT 1; END;");
+        assert_not_split("CREATE FUNCTION f() RETURNS int -- begin\nRETURN 1;");
+        assert_not_split("CREATE FUNCTION f() RETURNS int BEGIN ATOMIC SELECT 1 /* end; */; END;");
+    }
+
+    #[test]
+    fn keeps_unterminated_block_comment_as_one_tail() {
+        let sql = "SELECT 1 /* /* */ ; SELECT 2;";
         assert_eq!(split_statements(sql), [sql]);
     }
 }
