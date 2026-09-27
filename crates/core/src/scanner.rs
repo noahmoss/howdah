@@ -105,6 +105,7 @@ fn split_statements(sql: &str) -> Vec<&str> {
     while let Some((i, c)) = chars.next() {
         match c {
             '\'' => skip_quoted(&mut chars, '\''),
+            '"' => skip_quoted(&mut chars, '"'),
             '(' => {
                 state.paren_depth += 1;
             }
@@ -391,6 +392,48 @@ END;";
     #[test]
     fn keeps_unterminated_single_quote_as_one_tail() {
         let sql = "SELECT 'abc; SELECT 2;";
+        assert_eq!(split_statements(sql), [sql]);
+    }
+
+    #[test]
+    fn ignores_semicolons_and_parentheses_inside_double_quotes() {
+        for first in [
+            r#"SELECT 1 AS "a;b";"#,
+            r#"SELECT 1 AS "(";"#,
+            r#"SELECT 1 AS ")";"#,
+        ] {
+            let sql = format!("{first}SELECT 2;");
+            assert_eq!(split_statements(&sql), [first, "SELECT 2;"], "{first}");
+        }
+    }
+
+    #[test]
+    fn doubled_double_quotes_do_not_close_identifier() {
+        for first in [r#"SELECT 1 AS "a""b;";"#, r#"SELECT 1 AS """;""";"#] {
+            let sql = format!("{first}SELECT 2;");
+            assert_eq!(split_statements(&sql), [first, "SELECT 2;"], "{first}");
+        }
+    }
+
+    #[test]
+    fn quoted_identifiers_are_not_block_keywords() {
+        let first = r#"CREATE FUNCTION "begin"() RETURNS int RETURN 1;"#;
+        let routine = r#"CREATE FUNCTION f() RETURNS int BEGIN ATOMIC SELECT "end" FROM t; END;"#;
+        let sql = format!("{first}{routine}SELECT 3;");
+        assert_eq!(split_statements(&sql), [first, routine, "SELECT 3;"]);
+    }
+
+    #[test]
+    fn each_quote_kind_ignores_the_other() {
+        for first in [r#"SELECT 1 AS "it's";"#, r#"SELECT '"';"#] {
+            let sql = format!("{first}SELECT 2;");
+            assert_eq!(split_statements(&sql), [first, "SELECT 2;"], "{first}");
+        }
+    }
+
+    #[test]
+    fn keeps_unterminated_double_quote_as_one_tail() {
+        let sql = r#"SELECT 1 AS "abc; SELECT 2;"#;
         assert_eq!(split_statements(sql), [sql]);
     }
 }
