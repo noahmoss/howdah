@@ -1,5 +1,9 @@
 //! Splits SQL into statements. A rough port of parts of psql's lexer,
 //! `src/fe_utils/psqlscan.l` in the PostgreSQL source.
+//!
+//! Assumes `standard_conforming_strings` is on (the default since
+//! PostgreSQL 9.1), so a backslash in a plain `'...'` string is an ordinary
+//! character.
 
 /// Keywords that identify a `CREATE [OR REPLACE] {FUNCTION | PROCEDURE}`
 /// statement.
