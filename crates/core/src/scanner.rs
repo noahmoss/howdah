@@ -165,6 +165,7 @@ fn split_statements(sql: &str) -> Vec<&str> {
                 chars.next();
                 skip_quoted(&mut chars, '\'', Backslash::Escapes);
             }
+            ('$', _) => skip_dollar_quoted(&mut chars, sql, i),
             ('-', Some('-')) => {
                 chars.next();
                 skip_line_comment(&mut chars);
@@ -232,6 +233,40 @@ fn skip_quoted(chars: &mut Peekable<CharIndices>, delimiter: char, backslash: Ba
             _ => {}
         }
     }
+}
+
+/// Consumes the rest of a dollar-quoted string if the `$` at byte `start` opens
+/// one. Does nothing for a `$` that doesn't, like the parameter `$1`.
+fn skip_dollar_quoted(chars: &mut Peekable<CharIndices>, sql: &str, start: usize) {
+    if let Some(len) = dollar_quote_len(&sql[start..]) {
+        skip_to(chars, start + len);
+    }
+}
+
+/// If `s` starts with a dollar-quoted string (`$$...$$` or `$tag$...$tag$`),
+/// returns its length in bytes, including both delimiters. Unterminated input
+/// runs to the end.
+fn dollar_quote_len(s: &str) -> Option<usize> {
+    let (tag, _) = s.strip_prefix('$')?.split_once('$')?;
+    // A tag follows identifier rules
+    let valid_tag =
+        tag.chars().all(is_ident_char) && !tag.starts_with(|c: char| c.is_ascii_digit());
+    if !valid_tag {
+        return None;
+    }
+
+    let delimiter = format!("${tag}$");
+    let after_open = &s[delimiter.len()..];
+    let len = match after_open.find(&delimiter) {
+        Some(content_len) => delimiter.len() + content_len + delimiter.len(),
+        None => s.len(), // unterminated
+    };
+    Some(len)
+}
+
+/// Advances `chars` to byte offset `end`.
+fn skip_to(chars: &mut Peekable<CharIndices>, end: usize) {
+    while chars.next_if(|&(j, _)| j < end).is_some() {}
 }
 
 /// Consumes the rest of a `--` comment, up to but not including the newline.
@@ -637,5 +672,69 @@ END;",
     fn keeps_unterminated_block_comment_as_one_tail() {
         let sql = "SELECT 1 /* /* */ ; SELECT 2;";
         assert_eq!(split_statements(sql), [sql]);
+    }
+
+    #[test]
+    fn ignores_everything_inside_dollar_quotes() {
+        for statement in [
+            "SELECT $$a;b$$;",
+            "SELECT $$ ( ' \" -- /* E' $$;",
+            "SELECT $$$$;",
+        ] {
+            assert_not_split(statement);
+        }
+    }
+
+    #[test]
+    fn dollar_quote_closes_only_on_matching_tag() {
+        for statement in [
+            "SELECT $tag$ ; $$ ; $tag$;",
+            "SELECT $a$ ; $b$ ; $a$;",
+            "SELECT $a$ ; $ba$ ; $a$;",
+            "SELECT $A$ ; $a$ ; $A$;",
+            "SELECT $t_1é$ ; $t_1é$;",
+            "SELECT $a$ $5 ; a ; $a ; a$ ; $a$;",
+        ] {
+            assert_not_split(statement);
+        }
+    }
+
+    #[test]
+    fn ignores_block_keywords_inside_dollar_quotes() {
+        assert_not_split(
+            "CREATE FUNCTION f() RETURNS int LANGUAGE plpgsql AS $$
+BEGIN
+    RETURN 1;
+END;
+$$;",
+        );
+        assert_not_split(
+            "CREATE FUNCTION f() RETURNS int LANGUAGE plpgsql AS $body$
+BEGIN
+    RETURN (SELECT 1);
+END;
+$body$;",
+        );
+    }
+
+    #[test]
+    fn dollar_signs_that_do_not_open_a_quote() {
+        for statement in [
+            "SELECT $1;",
+            "SELECT $1, $2;",
+            "SELECT $1$ ;",
+            "SELECT $tag ;",
+            "SELECT a$b$ ;",
+            "SELECT a$$ ;",
+        ] {
+            assert_not_split(statement);
+        }
+    }
+
+    #[test]
+    fn keeps_unterminated_dollar_quote_as_one_tail() {
+        for sql in ["SELECT $$ ; SELECT 2;", "SELECT $a$ ; $b$ ; SELECT 2;"] {
+            assert_eq!(split_statements(sql), [sql], "{sql}");
+        }
     }
 }
