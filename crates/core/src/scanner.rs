@@ -141,13 +141,21 @@ impl ScanState {
     }
 }
 
+/// One statement found by [`split_statements`].
+#[derive(Debug)]
+struct Statement<'a> {
+    /// Byte offset of `text` in the original SQL.
+    start: usize,
+    text: &'a str,
+}
+
 /// Splits `sql` into statements the way psql does, without parsing it.
 ///
 /// A `;` ends a statement unless it's inside quotes, a comment, parentheses,
 /// or a `BEGIN ATOMIC` routine body. Each statement keeps its `;` and
-/// surrounding whitespace, so the slices concatenate back to `sql`. Text
+/// surrounding whitespace, so the texts concatenate back to `sql`. Text
 /// after the last `;` becomes a final statement.
-fn split_statements(sql: &str) -> Vec<&str> {
+fn split_statements(sql: &str) -> Vec<Statement<'_>> {
     let mut chars = sql.char_indices().peekable();
     let mut statements = Vec::new();
     let mut statement_start = 0;
@@ -176,7 +184,10 @@ fn split_statements(sql: &str) -> Vec<&str> {
             ('(', _) => state.open_paren(),
             (')', _) => state.close_paren(),
             (';', _) if state.at_boundary() => {
-                statements.push(&sql[statement_start..i + 1]);
+                statements.push(Statement {
+                    start: statement_start,
+                    text: &sql[statement_start..i + 1],
+                });
                 statement_start = i + 1;
                 state.end_statement();
             }
@@ -191,7 +202,10 @@ fn split_statements(sql: &str) -> Vec<&str> {
 
     let tail = &sql[statement_start..];
     if !tail.is_empty() {
-        statements.push(tail);
+        statements.push(Statement {
+            start: statement_start,
+            text: tail,
+        });
     }
 
     statements
@@ -302,12 +316,17 @@ fn skip_block_comment(chars: &mut Peekable<CharIndices>) {
 mod tests {
     use super::split_statements;
 
+    /// Just the text of each statement.
+    fn statement_texts(sql: &str) -> Vec<&str> {
+        split_statements(sql).iter().map(|s| s.text).collect()
+    }
+
     /// `statement` stays one statement, and a boundary follows right after it.
     #[track_caller]
     fn assert_not_split(statement: &str) {
         let sql = format!("{statement}SELECT 2;");
         assert_eq!(
-            split_statements(&sql),
+            statement_texts(&sql),
             [statement, "SELECT 2;"],
             "{statement}"
         );
@@ -315,36 +334,36 @@ mod tests {
 
     #[test]
     fn empty_input_has_no_statements() {
-        assert!(split_statements("").is_empty());
+        assert!(statement_texts("").is_empty());
     }
 
     #[test]
     fn splits_at_semicolons_and_keeps_unterminated_tail() {
         assert_eq!(
-            split_statements("SELECT 1;SELECT 2;SELECT 3"),
+            statement_texts("SELECT 1;SELECT 2;SELECT 3"),
             ["SELECT 1;", "SELECT 2;", "SELECT 3"]
         );
-        assert_eq!(split_statements("SELECT 1;"), ["SELECT 1;"]);
-        assert_eq!(split_statements("SELECT 1"), ["SELECT 1"]);
+        assert_eq!(statement_texts("SELECT 1;"), ["SELECT 1;"]);
+        assert_eq!(statement_texts("SELECT 1"), ["SELECT 1"]);
     }
 
     #[test]
     fn preserves_whitespace_in_statement_slices() {
         assert_eq!(
-            split_statements("  SELECT 1;\n\tSELECT 2;\n"),
+            statement_texts("  SELECT 1;\n\tSELECT 2;\n"),
             ["  SELECT 1;", "\n\tSELECT 2;", "\n"]
         );
     }
 
     #[test]
     fn preserves_empty_statements() {
-        assert_eq!(split_statements(";SELECT 1;;"), [";", "SELECT 1;", ";"]);
+        assert_eq!(statement_texts(";SELECT 1;;"), [";", "SELECT 1;", ";"]);
     }
 
     #[test]
     fn splits_after_multibyte_identifiers() {
         assert_eq!(
-            split_statements("SELECT café;SELECT 日本語"),
+            statement_texts("SELECT café;SELECT 日本語"),
             ["SELECT café;", "SELECT 日本語"]
         );
     }
@@ -353,11 +372,11 @@ mod tests {
     fn waits_for_all_parentheses_to_close() {
         // Deliberately invalid SQL: the scanner finds boundaries, not syntax errors.
         assert_eq!(
-            split_statements("SELECT (1; (2; 3); 4);SELECT 5;"),
+            statement_texts("SELECT (1; (2; 3); 4);SELECT 5;"),
             ["SELECT (1; (2; 3); 4);", "SELECT 5;"]
         );
         assert_eq!(
-            split_statements("SELECT (1;SELECT 2;"),
+            statement_texts("SELECT (1;SELECT 2;"),
             ["SELECT (1;SELECT 2;"]
         );
     }
@@ -370,7 +389,7 @@ mod tests {
     #[test]
     fn transaction_begin_does_not_open_a_routine_body() {
         assert_eq!(
-            split_statements("BEGIN;INSERT INTO t VALUES (1);COMMIT;"),
+            statement_texts("BEGIN;INSERT INTO t VALUES (1);COMMIT;"),
             ["BEGIN;", "INSERT INTO t VALUES (1);", "COMMIT;"]
         );
     }
@@ -465,7 +484,7 @@ END;",
         let procedure = "CREATE PROCEDURE p() LANGUAGE SQL BEGIN ATOMIC SELECT 2; END;";
         let sql = format!("{routine}BEGIN;SELECT 3;COMMIT;{procedure}");
         assert_eq!(
-            split_statements(&sql),
+            statement_texts(&sql),
             [routine, "BEGIN;", "SELECT 3;", "COMMIT;", procedure]
         );
     }
@@ -473,7 +492,7 @@ END;",
     #[test]
     fn keeps_unfinished_routine_as_one_tail() {
         let sql = "CREATE FUNCTION f() RETURNS int BEGIN ATOMIC SELECT 1; SELECT 2;";
-        assert_eq!(split_statements(sql), [sql]);
+        assert_eq!(statement_texts(sql), [sql]);
     }
 
     #[test]
@@ -496,7 +515,7 @@ END;",
     #[test]
     fn ignores_parentheses_inside_single_quotes() {
         assert_eq!(
-            split_statements("SELECT '(';SELECT ')';SELECT 3;"),
+            statement_texts("SELECT '(';SELECT ')';SELECT 3;"),
             ["SELECT '(';", "SELECT ')';", "SELECT 3;"]
         );
     }
@@ -506,7 +525,7 @@ END;",
         let routine = "CREATE FUNCTION f() RETURNS text BEGIN ATOMIC SELECT 'end;'; END;";
         let sql = format!("{routine}SELECT 'begin';SELECT 3;");
         assert_eq!(
-            split_statements(&sql),
+            statement_texts(&sql),
             [routine, "SELECT 'begin';", "SELECT 3;"]
         );
     }
@@ -519,7 +538,7 @@ END;",
     #[test]
     fn keeps_unterminated_single_quote_as_one_tail() {
         let sql = "SELECT 'abc; SELECT 2;";
-        assert_eq!(split_statements(sql), [sql]);
+        assert_eq!(statement_texts(sql), [sql]);
     }
 
     #[test]
@@ -545,7 +564,7 @@ END;",
         let first = r#"CREATE FUNCTION "begin"() RETURNS int RETURN 1;"#;
         let routine = r#"CREATE FUNCTION f() RETURNS int BEGIN ATOMIC SELECT "end" FROM t; END;"#;
         let sql = format!("{first}{routine}SELECT 3;");
-        assert_eq!(split_statements(&sql), [first, routine, "SELECT 3;"]);
+        assert_eq!(statement_texts(&sql), [first, routine, "SELECT 3;"]);
     }
 
     #[test]
@@ -558,7 +577,7 @@ END;",
     #[test]
     fn keeps_unterminated_double_quote_as_one_tail() {
         let sql = r#"SELECT 1 AS "abc; SELECT 2;"#;
-        assert_eq!(split_statements(sql), [sql]);
+        assert_eq!(statement_texts(sql), [sql]);
     }
 
     #[test]
@@ -584,7 +603,7 @@ END;",
     #[test]
     fn keeps_unterminated_escape_string_as_one_tail() {
         let sql = r"SELECT E'abc\'; SELECT 2;";
-        assert_eq!(split_statements(sql), [sql]);
+        assert_eq!(statement_texts(sql), [sql]);
     }
 
     #[test]
@@ -602,7 +621,7 @@ END;",
     #[test]
     fn keeps_trailing_line_comment_as_its_own_tail() {
         assert_eq!(
-            split_statements("SELECT 1; -- done;"),
+            statement_texts("SELECT 1; -- done;"),
             ["SELECT 1;", " -- done;"]
         );
     }
@@ -671,7 +690,7 @@ END;",
     #[test]
     fn keeps_unterminated_block_comment_as_one_tail() {
         let sql = "SELECT 1 /* /* */ ; SELECT 2;";
-        assert_eq!(split_statements(sql), [sql]);
+        assert_eq!(statement_texts(sql), [sql]);
     }
 
     #[test]
@@ -734,7 +753,33 @@ $body$;",
     #[test]
     fn keeps_unterminated_dollar_quote_as_one_tail() {
         for sql in ["SELECT $$ ; SELECT 2;", "SELECT $a$ ; $b$ ; SELECT 2;"] {
-            assert_eq!(split_statements(sql), [sql], "{sql}");
+            assert_eq!(statement_texts(sql), [sql], "{sql}");
+        }
+    }
+
+    #[test]
+    fn starts_are_byte_offsets() {
+        let starts: Vec<usize> = split_statements("SELECT 1;\nSELECT 'é';SELECT 3")
+            .iter()
+            .map(|s| s.start)
+            .collect();
+        assert_eq!(starts, [0, 9, 22]);
+    }
+
+    #[test]
+    fn statements_cover_the_input_in_order() {
+        for sql in [
+            "SELECT 1;SELECT 2;SELECT 3",
+            "  SELECT 1;\n\tSELECT 2;\n",
+            ";SELECT 'a;b';;",
+            "SELECT café; -- done;\nSELECT $$日本;語$$;",
+        ] {
+            let mut expected_start = 0;
+            for statement in split_statements(sql) {
+                assert_eq!(statement.start, expected_start, "{sql}");
+                expected_start += statement.text.len();
+            }
+            assert_eq!(expected_start, sql.len(), "{sql}");
         }
     }
 }
