@@ -1,9 +1,9 @@
-// Rough port of parts of @postgres/postgres/blob/master/src/fe_utils/psqlscan.l
-// for splitting a SQL string on statement boundaries.
+//! Rough port of parts of @postgres/postgres/blob/master/src/fe_utils/psqlscan.l
+//! for splitting a SQL string on statement boundaries.
 
 use std::{iter::Peekable, str::CharIndices};
 
-// Identifier keywords that impact scanning behavior
+/// Identifier keywords that impact scanning behavior
 #[derive(Clone, Copy, Default)]
 enum Keyword {
     Create,
@@ -37,7 +37,7 @@ struct ScanState {
 }
 
 impl ScanState {
-    // Port of psqlscan_track_identifier
+    /// Port of psqlscan_track_identifier
     fn track_identifier(&mut self, identifier: &str) {
         if self.paren_depth != 0 {
             return;
@@ -73,7 +73,7 @@ impl ScanState {
         }
     }
 
-    // Does the current input match CREATE [OR REPLACE] {FUNCTION|PROCEDURE}?
+    /// Does the current input match CREATE [OR REPLACE] {FUNCTION|PROCEDURE}?
     fn is_create_routine(&self) -> bool {
         use Keyword::{Create, Function, Or, Procedure, Replace};
 
@@ -91,16 +91,6 @@ fn split_statements(sql: &str) -> Vec<&str> {
     let mut statement_start = 0;
 
     let mut state = ScanState::default();
-
-    // Start of an identifier: [A-Za-z\200-\377_]
-    fn ident_start(c: char) -> bool {
-        c.is_ascii_alphabetic() || !c.is_ascii() || c == '_'
-    }
-
-    // Continuation of an identifier: [A-Za-z\200-\377_0-9\$]
-    fn ident_cont(c: char) -> bool {
-        ident_start(c) || c.is_ascii_digit() || c == '$'
-    }
 
     while let Some((i, c)) = chars.next() {
         match c {
@@ -120,17 +110,8 @@ fn split_statements(sql: &str) -> Vec<&str> {
                 state.init_idents_count = 0;
             }
             c if ident_start(c) => {
-                while let Some(&(_, c_next)) = chars.peek() {
-                    if !ident_cont(c_next) {
-                        break;
-                    }
-                    chars.next();
-                }
-
-                let end = match chars.peek() {
-                    Some(&(i_next, _)) => i_next,
-                    None => sql.len(),
-                };
+                while chars.next_if(|&(_, next)| ident_cont(next)).is_some() {}
+                let end = chars.peek().map_or(sql.len(), |&(i_next, _)| i_next);
 
                 let identifier = &sql[i..end];
                 state.track_identifier(identifier);
@@ -147,8 +128,18 @@ fn split_statements(sql: &str) -> Vec<&str> {
     statements
 }
 
-// Consume the rest of a quoted token through its closing delimiter.
-// Unterminated input consumes to the end.
+/// Start of an identifier: [A-Za-z\200-\377_]
+fn ident_start(c: char) -> bool {
+    c.is_ascii_alphabetic() || !c.is_ascii() || c == '_'
+}
+
+/// Continuation of an identifier: [A-Za-z\200-\377_0-9\$]
+fn ident_cont(c: char) -> bool {
+    ident_start(c) || c.is_ascii_digit() || c == '$'
+}
+
+/// Consume the rest of a quoted token through its closing delimiter.
+/// Unterminated input consumes to the end.
 fn skip_quoted(chars: &mut Peekable<CharIndices>, delimiter: char) {
     while let Some((_, c)) = chars.next() {
         if c != delimiter {
@@ -166,7 +157,7 @@ fn skip_quoted(chars: &mut Peekable<CharIndices>, delimiter: char) {
 mod tests {
     use super::split_statements;
 
-    // `statement` stays one statement, and a boundary follows right after it.
+    /// `statement` stays one statement, and a boundary follows right after it.
     #[track_caller]
     fn assert_not_split(statement: &str) {
         let sql = format!("{statement}SELECT 2;");
