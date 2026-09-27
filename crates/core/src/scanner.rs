@@ -103,20 +103,20 @@ impl ScanState {
     ///   body.
     /// - Identifiers inside parentheses are ignored, so a parameter named
     ///   `begin` doesn't open a block.
-    ///
-    /// Port of `psqlscan_track_identifier`.
     fn track_identifier(&mut self, identifier: &str) {
         if self.paren_depth != 0 {
             return;
         }
 
-        self.record_leading_keyword(identifier);
+        let keyword = Keyword::from_identifier(identifier);
+        self.record_leading_keyword(keyword);
 
         if self.is_create_routine() {
-            if self.opens_block(identifier) {
-                self.block_depth += 1;
-            } else if self.closes_block(identifier) {
-                self.block_depth -= 1;
+            match keyword {
+                Keyword::Begin => self.block_depth += 1,
+                Keyword::Case if self.block_depth > 0 => self.block_depth += 1,
+                Keyword::End if self.block_depth > 0 => self.block_depth -= 1,
+                _ => {}
             }
         }
     }
@@ -131,12 +131,10 @@ impl ScanState {
         self.leading_keywords.clear();
     }
 
-    /// Stores the identifier's keyword if it's among the statement's first
-    /// few.
-    fn record_leading_keyword(&mut self, identifier: &str) {
+    /// Stores `keyword` if it's among the statement's first few.
+    fn record_leading_keyword(&mut self, keyword: Keyword) {
         if self.leading_keywords.len() < Self::MAX_LEADING_KEYWORDS {
-            self.leading_keywords
-                .push(Keyword::from_identifier(identifier));
+            self.leading_keywords.push(keyword);
         }
     }
 
@@ -150,21 +148,11 @@ impl ScanState {
             [Create, Function | Procedure, ..] | [Create, Or, Replace, Function | Procedure, ..]
         )
     }
-
-    /// `BEGIN`, or `CASE` inside an open block.
-    fn opens_block(&self, identifier: &str) -> bool {
-        identifier.eq_ignore_ascii_case("begin")
-            || (identifier.eq_ignore_ascii_case("case") && self.block_depth > 0)
-    }
-
-    /// `END` of an open block.
-    fn closes_block(&self, identifier: &str) -> bool {
-        identifier.eq_ignore_ascii_case("end") && self.block_depth > 0
-    }
 }
 
-/// Keywords that identify a `CREATE [OR REPLACE] {FUNCTION | PROCEDURE}`
-/// statement.
+/// Keywords that affect statement boundaries: the
+/// `CREATE [OR REPLACE] {FUNCTION | PROCEDURE}` prefix, and the blocks of a
+/// `BEGIN ATOMIC` body.
 #[derive(Clone, Copy)]
 enum Keyword {
     Create,
@@ -172,6 +160,9 @@ enum Keyword {
     Replace,
     Function,
     Procedure,
+    Begin,
+    Case,
+    End,
     /// Any other identifier.
     Other,
 }
@@ -185,6 +176,9 @@ impl Keyword {
             s if s.eq_ignore_ascii_case("replace") => Self::Replace,
             s if s.eq_ignore_ascii_case("function") => Self::Function,
             s if s.eq_ignore_ascii_case("procedure") => Self::Procedure,
+            s if s.eq_ignore_ascii_case("begin") => Self::Begin,
+            s if s.eq_ignore_ascii_case("case") => Self::Case,
+            s if s.eq_ignore_ascii_case("end") => Self::End,
             _ => Self::Other,
         }
     }
@@ -326,9 +320,9 @@ fn dollar_quote_len(s: &str) -> Option<usize> {
         return None;
     }
 
-    let delimiter = format!("${tag}$");
+    let delimiter = &s[..tag.len() + 2];
     let after_open = &s[delimiter.len()..];
-    let len = match after_open.find(&delimiter) {
+    let len = match after_open.find(delimiter) {
         Some(content_len) => delimiter.len() + content_len + delimiter.len(),
         None => s.len(), // unterminated
     };
@@ -879,6 +873,12 @@ $body$;",
         ] {
             assert_not_split(statement);
         }
+    }
+
+    #[test]
+    fn dollar_sign_at_end_of_input() {
+        assert_eq!(statement_texts("SELECT $"), ["SELECT $"]);
+        assert_eq!(statement_texts("SELECT 1;$"), ["SELECT 1;", "$"]);
     }
 
     #[test]
