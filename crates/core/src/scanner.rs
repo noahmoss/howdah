@@ -147,6 +147,8 @@ struct Statement<'a> {
     /// Byte offset of `text` in the original SQL.
     start: usize,
     text: &'a str,
+    /// False when `text` is only whitespace, comments, and the closing `;`.
+    has_content: bool,
 }
 
 /// Splits `sql` into statements the way psql does, without parsing it.
@@ -159,45 +161,70 @@ fn split_statements(sql: &str) -> Vec<Statement<'_>> {
     let mut chars = sql.char_indices().peekable();
     let mut statements = Vec::new();
     let mut statement_start = 0;
+    let mut has_content = false;
     let mut state = ScanState::default();
 
     while let Some((i, c)) = chars.next() {
         let next = chars.peek().map(|&(_, n)| n);
 
-        match (c, next) {
-            ('\'', _) => skip_quoted(&mut chars, '\'', Backslash::Literal),
-            ('"', _) => skip_quoted(&mut chars, '"', Backslash::Literal),
+        let is_content = match (c, next) {
+            ('\'', _) => {
+                skip_quoted(&mut chars, '\'', Backslash::Literal);
+                true
+            }
+            ('"', _) => {
+                skip_quoted(&mut chars, '"', Backslash::Literal);
+                true
+            }
             // Escape string
             ('e' | 'E', Some('\'')) => {
                 chars.next();
                 skip_quoted(&mut chars, '\'', Backslash::Escapes);
+                true
             }
-            ('$', _) => skip_dollar_quoted(&mut chars, sql, i),
+            ('$', _) => {
+                skip_dollar_quoted(&mut chars, sql, i);
+                true
+            }
             ('-', Some('-')) => {
                 chars.next();
                 skip_line_comment(&mut chars);
+                false
             }
             ('/', Some('*')) => {
                 chars.next();
                 skip_block_comment(&mut chars);
+                false
             }
-            ('(', _) => state.open_paren(),
-            (')', _) => state.close_paren(),
+            ('(', _) => {
+                state.open_paren();
+                true
+            }
+            (')', _) => {
+                state.close_paren();
+                true
+            }
             (';', _) if state.at_boundary() => {
                 statements.push(Statement {
                     start: statement_start,
                     text: &sql[statement_start..i + 1],
+                    has_content,
                 });
                 statement_start = i + 1;
+                has_content = false;
                 state.end_statement();
+                false
             }
             _ if is_ident_start(c) => {
                 let identifier = leading_identifier(&sql[i..]);
                 skip_to(&mut chars, i + identifier.len());
                 state.track_identifier(identifier);
+                true
             }
-            _ => {}
-        }
+            _ => !c.is_whitespace(),
+        };
+
+        has_content |= is_content;
     }
 
     let tail = &sql[statement_start..];
@@ -205,6 +232,7 @@ fn split_statements(sql: &str) -> Vec<Statement<'_>> {
         statements.push(Statement {
             start: statement_start,
             text: tail,
+            has_content,
         });
     }
 
@@ -332,6 +360,14 @@ mod tests {
         );
     }
 
+    /// Just the `has_content` of each statement.
+    fn content_flags(sql: &str) -> Vec<bool> {
+        split_statements(sql)
+            .iter()
+            .map(|s| s.has_content)
+            .collect()
+    }
+
     #[test]
     fn empty_input_has_no_statements() {
         assert!(statement_texts("").is_empty());
@@ -358,6 +394,50 @@ mod tests {
     #[test]
     fn preserves_empty_statements() {
         assert_eq!(statement_texts(";SELECT 1;;"), [";", "SELECT 1;", ";"]);
+    }
+
+    #[test]
+    fn whitespace_comments_and_semicolons_are_not_content() {
+        for sql in [
+            ";", " \n\t;", "-- x\n;", "/* x */;", "-- x", "/* x */", " \n\t",
+        ] {
+            assert_eq!(content_flags(sql), [false], "{sql:?}");
+        }
+    }
+
+    #[test]
+    fn any_other_token_is_content() {
+        for sql in [
+            "SELECT 1;",
+            "1;",
+            "+;",
+            "();",
+            "'';",
+            "E'';",
+            r#""";"#,
+            "$$$$;",
+            "$1;",
+            "/* x */ SELECT 1 -- y\n;",
+        ] {
+            assert_eq!(content_flags(sql), [true], "{sql:?}");
+        }
+    }
+
+    #[test]
+    fn whitespace_matches_postgres() {
+        // Postgres 16+ lexes \v as whitespace but treats non-ASCII spaces as
+        // identifier characters.
+        assert_eq!(content_flags("\x0B\x0C;"), [false]);
+        assert_eq!(content_flags("\u{a0};"), [true]);
+    }
+
+    #[test]
+    fn content_resets_at_each_boundary() {
+        assert_eq!(
+            content_flags(";SELECT 1;; -- done"),
+            [false, true, false, false]
+        );
+        assert_eq!(content_flags("-- x\n;SELECT 1"), [false, true]);
     }
 
     #[test]
