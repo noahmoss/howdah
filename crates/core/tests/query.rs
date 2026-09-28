@@ -1,3 +1,7 @@
+//! Tests that need a running PostgreSQL, so every test is `#[ignore]`d. Set
+//! `HOWDAH_TEST_DATABASE_URL` and run with `--ignored`, or use
+//! `make test-integration`.
+
 mod common;
 
 use std::time::Duration;
@@ -5,7 +9,7 @@ use std::time::Duration;
 use howdah_core::run_sql;
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL; set HOWDAH_TEST_DATABASE_URL and run with --ignored"]
+#[ignore]
 async fn preserves_commands_without_row_counts() {
     let client = common::connect().await;
     let results = run_sql(&client, "CREATE TEMP TABLE command_tags (id INT)")
@@ -22,7 +26,7 @@ async fn preserves_commands_without_row_counts() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL; set HOWDAH_TEST_DATABASE_URL and run with --ignored"]
+#[ignore]
 async fn preserves_zero_rows_affected() {
     let client = common::connect().await;
     client
@@ -43,7 +47,7 @@ async fn preserves_zero_rows_affected() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL; set HOWDAH_TEST_DATABASE_URL and run with --ignored"]
+#[ignore]
 async fn preserves_nonzero_rows_affected() {
     let client = common::connect().await;
     client
@@ -67,7 +71,7 @@ async fn preserves_nonzero_rows_affected() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL; set HOWDAH_TEST_DATABASE_URL and run with --ignored"]
+#[ignore]
 async fn preserves_insert_tag_with_returning_rows() {
     let client = common::connect().await;
     client
@@ -91,7 +95,7 @@ async fn preserves_insert_tag_with_returning_rows() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL; set HOWDAH_TEST_DATABASE_URL and run with --ignored"]
+#[ignore]
 async fn preserves_columns_for_empty_result_sets() {
     let client = common::connect().await;
     let results = run_sql(&client, "SELECT 1 AS id WHERE false")
@@ -108,7 +112,7 @@ async fn preserves_columns_for_empty_result_sets() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL; set HOWDAH_TEST_DATABASE_URL and run with --ignored"]
+#[ignore]
 async fn keeps_statement_results_separate() {
     let client = common::connect().await;
     let results = run_sql(
@@ -142,7 +146,7 @@ async fn keeps_statement_results_separate() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL; set HOWDAH_TEST_DATABASE_URL and run with --ignored"]
+#[ignore]
 async fn skips_queries_without_statements() {
     let client = common::connect().await;
     for sql in ["", "  ", "-- comment", "/* comment */", "; ;"] {
@@ -152,7 +156,7 @@ async fn skips_queries_without_statements() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL; set HOWDAH_TEST_DATABASE_URL and run with --ignored"]
+#[ignore]
 async fn skips_empty_statements_around_a_query() {
     let client = common::connect().await;
     let results = run_sql(&client, "; SELECT 1 WHERE false; ; -- comment")
@@ -169,7 +173,7 @@ async fn skips_empty_statements_around_a_query() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL; set HOWDAH_TEST_DATABASE_URL and run with --ignored"]
+#[ignore]
 async fn times_the_whole_run() {
     let client = common::connect().await;
     let run = run_sql(&client, "SELECT 1; SELECT pg_sleep(0.05); SELECT 2")
@@ -186,7 +190,7 @@ async fn times_the_whole_run() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL; set HOWDAH_TEST_DATABASE_URL and run with --ignored"]
+#[ignore]
 async fn times_runs_that_end_in_an_error() {
     let client = common::connect().await;
     let run = run_sql(&client, "SELECT pg_sleep(0.05); SELECT 1/0")
@@ -203,7 +207,7 @@ async fn times_runs_that_end_in_an_error() {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL; set HOWDAH_TEST_DATABASE_URL and run with --ignored"]
+#[ignore]
 async fn positions_errors_within_the_whole_sql() {
     let client = common::connect().await;
     // `é` is two bytes but one character, so a byte offset would be off by one.
