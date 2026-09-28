@@ -6,6 +6,8 @@ use tokio_postgres::{
     error::{DbError, ErrorPosition},
 };
 
+use crate::scanner::split_statements;
+
 mod scanner;
 
 #[derive(Debug, Default)]
@@ -19,7 +21,7 @@ pub struct StatementResult {
     pub tag: String,
 }
 
-/// Everything one `run_query` call produced.
+/// Everything one `run_sql` call produced.
 #[derive(Debug)]
 pub struct QueryRun {
     /// One entry per statement that ran, in execution order.
@@ -64,37 +66,25 @@ impl From<&DbError> for SqlError {
     }
 }
 
-pub async fn run_query(client: &Client, sql: &str) -> Result<QueryRun, tokio_postgres::Error> {
+/// Runs each statement in `sql` in its own round trip, stopping at the first
+/// SQL error. Each statement commits on its own unless the SQL opens a
+/// transaction. Statements with no content are skipped.
+pub async fn run_sql(client: &Client, sql: &str) -> Result<QueryRun, tokio_postgres::Error> {
     let started = Instant::now();
-    let stream = client.simple_query_raw(sql).await?;
-    tokio::pin!(stream);
-
     let mut statements = Vec::new();
-    let mut current = StatementResult::default();
 
-    while let Some(msg) = stream.next().await {
-        let msg = match msg {
-            Ok(msg) => msg,
-            Err(err) => match err.as_db_error() {
-                Some(db_error) => {
-                    statements.push(Err(db_error.into()));
-                    break;
-                }
-                None => return Err(err),
-            },
-        };
-        match msg {
-            SimpleQueryMessage::RowDescription(desc) => current.cols = Some(column_names(&desc)),
-            SimpleQueryMessage::Row(row) => current.rows.push(cells(&row)),
-            SimpleQueryMessage::CommandComplete(command) => {
-                current.row_count = command.rows_affected();
-                current.tag = command.tag().to_owned();
-                statements.push(Ok(current));
-                current = StatementResult::default();
+    for statement in split_statements(sql).iter().filter(|s| s.has_content) {
+        match run_statement(client, statement.text).await? {
+            Ok(result) => statements.push(Ok(result)),
+            Err(error) => {
+                // The server counts characters from the start of the statement
+                // it was sent; callers need them counted from the start of `sql`.
+                let position = error
+                    .position
+                    .map(|p| p + sql[..statement.start].chars().count() as u32);
+                statements.push(Err(SqlError { position, ..error }));
+                break;
             }
-            // No statement ran, so there is no result to collect.
-            SimpleQueryMessage::EmptyQueryResponse => {}
-            _ => {}
         }
     }
 
@@ -102,6 +92,38 @@ pub async fn run_query(client: &Client, sql: &str) -> Result<QueryRun, tokio_pos
         statements,
         elapsed: started.elapsed(),
     })
+}
+
+/// Runs one statement. The outer `Result` is the connection failing; the
+/// inner one is the statement's own outcome, where a SQL error is data.
+async fn run_statement(
+    client: &Client,
+    statement: &str,
+) -> Result<Result<StatementResult, SqlError>, tokio_postgres::Error> {
+    let stream = client.simple_query_raw(statement).await?;
+    tokio::pin!(stream);
+
+    let mut result = StatementResult::default();
+    while let Some(msg) = stream.next().await {
+        let msg = match msg {
+            Ok(msg) => msg,
+            Err(err) => match err.as_db_error() {
+                Some(db_error) => return Ok(Err(db_error.into())),
+                None => return Err(err),
+            },
+        };
+        match msg {
+            SimpleQueryMessage::RowDescription(desc) => result.cols = Some(column_names(&desc)),
+            SimpleQueryMessage::Row(row) => result.rows.push(cells(&row)),
+            SimpleQueryMessage::CommandComplete(command) => {
+                result.row_count = command.rows_affected();
+                result.tag = command.tag().to_owned();
+            }
+            _ => {}
+        }
+    }
+
+    Ok(Ok(result))
 }
 
 fn column_names(desc: &[SimpleColumn]) -> Vec<String> {

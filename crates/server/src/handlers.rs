@@ -4,7 +4,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use howdah_core::run_query;
+use howdah_core::run_sql;
 use nvim_rs::{Handler, Neovim, Value, compat::tokio::Compat};
 use tokio::fs::File;
 use tokio_postgres::{Client, Config, NoTls};
@@ -83,7 +83,7 @@ impl NeovimHandler {
         };
 
         // Only server failures use the RPC error channel; SQL errors are data.
-        let run = run_query(&client, sql)
+        let run = run_sql(&client, sql)
             .await
             .map_err(|err| Value::from(format!("execution error: {}", error_chain(&err))))?;
 

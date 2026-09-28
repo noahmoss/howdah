@@ -7,12 +7,12 @@
 
 /// One statement found by [`split_statements`].
 #[derive(Debug)]
-struct Statement<'a> {
+pub struct Statement<'a> {
     /// Byte offset of `text` in the original SQL.
-    start: usize,
-    text: &'a str,
+    pub start: usize,
+    pub text: &'a str,
     /// False when `text` is only whitespace, comments, and the closing `;`.
-    has_content: bool,
+    pub has_content: bool,
 }
 
 /// Splits `sql` into statements the way psql does, without parsing it.
@@ -21,7 +21,7 @@ struct Statement<'a> {
 /// or a `BEGIN ATOMIC` routine body. Each statement keeps its `;` and
 /// surrounding whitespace, so the texts concatenate back to `sql`. Text
 /// after the last `;` becomes a final statement.
-fn split_statements(sql: &str) -> Vec<Statement<'_>> {
+pub fn split_statements(sql: &str) -> Vec<Statement<'_>> {
     let mut statements = Vec::new();
     let mut statement_start = 0;
     let mut has_content = false;

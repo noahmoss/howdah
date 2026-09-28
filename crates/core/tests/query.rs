@@ -2,13 +2,13 @@ mod common;
 
 use std::time::Duration;
 
-use howdah_core::run_query;
+use howdah_core::run_sql;
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL; set HOWDAH_TEST_DATABASE_URL and run with --ignored"]
 async fn preserves_commands_without_row_counts() {
     let client = common::connect().await;
-    let results = run_query(&client, "CREATE TEMP TABLE command_tags (id INT)")
+    let results = run_sql(&client, "CREATE TEMP TABLE command_tags (id INT)")
         .await
         .unwrap()
         .statements;
@@ -29,7 +29,7 @@ async fn preserves_zero_rows_affected() {
         .batch_execute("CREATE TEMP TABLE command_tags (id INT)")
         .await
         .unwrap();
-    let results = run_query(&client, "UPDATE command_tags SET id = 3")
+    let results = run_sql(&client, "UPDATE command_tags SET id = 3")
         .await
         .unwrap()
         .statements;
@@ -53,7 +53,7 @@ async fn preserves_nonzero_rows_affected() {
         )
         .await
         .unwrap();
-    let results = run_query(&client, "DELETE FROM command_tags")
+    let results = run_sql(&client, "DELETE FROM command_tags")
         .await
         .unwrap()
         .statements;
@@ -74,7 +74,7 @@ async fn preserves_insert_tag_with_returning_rows() {
         .batch_execute("CREATE TEMP TABLE command_tags (id INT)")
         .await
         .unwrap();
-    let results = run_query(
+    let results = run_sql(
         &client,
         "INSERT INTO command_tags VALUES (1), (2) RETURNING id",
     )
@@ -94,7 +94,7 @@ async fn preserves_insert_tag_with_returning_rows() {
 #[ignore = "requires PostgreSQL; set HOWDAH_TEST_DATABASE_URL and run with --ignored"]
 async fn preserves_columns_for_empty_result_sets() {
     let client = common::connect().await;
-    let results = run_query(&client, "SELECT 1 AS id WHERE false")
+    let results = run_sql(&client, "SELECT 1 AS id WHERE false")
         .await
         .unwrap()
         .statements;
@@ -111,7 +111,7 @@ async fn preserves_columns_for_empty_result_sets() {
 #[ignore = "requires PostgreSQL; set HOWDAH_TEST_DATABASE_URL and run with --ignored"]
 async fn keeps_statement_results_separate() {
     let client = common::connect().await;
-    let results = run_query(
+    let results = run_sql(
         &client,
         "SELECT 1 AS first;
          SELECT 2 AS second;
@@ -146,7 +146,7 @@ async fn keeps_statement_results_separate() {
 async fn skips_queries_without_statements() {
     let client = common::connect().await;
     for sql in ["", "  ", "-- comment", "/* comment */", "; ;"] {
-        let run = run_query(&client, sql).await.unwrap();
+        let run = run_sql(&client, sql).await.unwrap();
         assert!(run.statements.is_empty(), "{sql:?}");
     }
 }
@@ -155,7 +155,7 @@ async fn skips_queries_without_statements() {
 #[ignore = "requires PostgreSQL; set HOWDAH_TEST_DATABASE_URL and run with --ignored"]
 async fn skips_empty_statements_around_a_query() {
     let client = common::connect().await;
-    let results = run_query(&client, "; SELECT 1 WHERE false; ; -- comment")
+    let results = run_sql(&client, "; SELECT 1 WHERE false; ; -- comment")
         .await
         .unwrap()
         .statements;
@@ -172,7 +172,7 @@ async fn skips_empty_statements_around_a_query() {
 #[ignore = "requires PostgreSQL; set HOWDAH_TEST_DATABASE_URL and run with --ignored"]
 async fn times_the_whole_run() {
     let client = common::connect().await;
-    let run = run_query(&client, "SELECT 1; SELECT pg_sleep(0.05); SELECT 2")
+    let run = run_sql(&client, "SELECT 1; SELECT pg_sleep(0.05); SELECT 2")
         .await
         .unwrap();
 
@@ -189,7 +189,7 @@ async fn times_the_whole_run() {
 #[ignore = "requires PostgreSQL; set HOWDAH_TEST_DATABASE_URL and run with --ignored"]
 async fn times_runs_that_end_in_an_error() {
     let client = common::connect().await;
-    let run = run_query(&client, "SELECT pg_sleep(0.05); SELECT 1/0")
+    let run = run_sql(&client, "SELECT pg_sleep(0.05); SELECT 1/0")
         .await
         .unwrap();
 
@@ -200,4 +200,18 @@ async fn times_runs_that_end_in_an_error() {
         "{:?}",
         run.elapsed
     );
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL; set HOWDAH_TEST_DATABASE_URL and run with --ignored"]
+async fn positions_errors_within_the_whole_sql() {
+    let client = common::connect().await;
+    // `é` is two bytes but one character, so a byte offset would be off by one.
+    let sql = "SELECT 'é';\nSELECT bogus;";
+    let run = run_sql(&client, sql).await.unwrap();
+
+    assert_eq!(run.statements.len(), 2);
+    let error = run.statements[1].as_ref().unwrap_err();
+    // 1-based character position of `bogus` in `sql`.
+    assert_eq!(error.position, Some(20));
 }
